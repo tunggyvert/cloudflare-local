@@ -1,0 +1,12 @@
+# esbuild/protobufjs need their install scripts; the rest are optional native
+# extras we do not use (ssh2/cpu-features are dockerode's SSH transport — we
+# talk to the local socket — and electron-winstaller only matters on Windows).
+allowBuilds:
+  cpu-features: false
+  electron-winstaller: false
+  electron: true
+  esbuild: true
+  protobufjs: true
+  ssh2: false
+minimumReleaseAgeExclude:
+  - electron@44.0.0
