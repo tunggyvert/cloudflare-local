@@ -119,3 +119,17 @@ export interface Orphan {
   /** The change that would remove it. */
   cleanup: Change
 }
+
+/**
+ * An ephemeral Cloudflare Quick Tunnel (TryCloudflare) running locally without
+ * an account, exposing a local origin URL to a generated trycloudflare.com domain.
+ */
+export interface QuickTunnel {
+  id: string
+  targetUrl: string
+  publicUrl?: string
+  status: 'starting' | 'running' | 'stopped' | 'crashed'
+  createdAt: string
+  error?: string
+}
+

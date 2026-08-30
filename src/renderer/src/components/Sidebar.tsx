@@ -1,4 +1,5 @@
 import {
+  IconBolt,
   IconClose,
   IconContainer,
   IconDashboard,
@@ -11,12 +12,14 @@ import type { View } from '../views/types'
 
 const NAV: { id: View; label: string; icon: typeof IconDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: IconDashboard },
+  { id: 'quick-tunnel', label: 'Quick Tunnel', icon: IconBolt },
   { id: 'containers', label: 'Containers', icon: IconContainer },
   { id: 'tunnels', label: 'Tunnels', icon: IconTunnel },
   { id: 'dns', label: 'DNS Records', icon: IconDns },
   { id: 'orphans', label: 'Orphans', icon: IconOrphan },
   { id: 'logs', label: 'Logs', icon: IconLogs },
 ]
+
 
 export function Sidebar({
   view,

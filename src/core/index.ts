@@ -13,6 +13,7 @@ import { DockerProvider } from './providers/docker'
 import { CloudflareProvider } from './providers/cloudflare'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
+import { QuickTunnelManager } from './quick-tunnel'
 import { readToken, saveToken, deleteToken } from './secrets'
 import type { Provider } from './providers/types'
 import type { Resource, Service } from '../shared/model'
@@ -21,6 +22,7 @@ import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/p
 const VERSION = '0.0.1'
 
 const supervisor = new Supervisor()
+const quickTunnels = new QuickTunnelManager(supervisor)
 const docker = new DockerProvider()
 let cloudflare: CloudflareProvider | null = null
 let accountMeta: { accountId: string; label: string } | null = null
@@ -63,6 +65,8 @@ function emit<E extends RpcEvent['event']>(event: E, payload: unknown): void {
 
 supervisor.on('log', (e) => emit('log', e))
 supervisor.on('state', (e) => emit('process', e))
+quickTunnels.on('update', (tunnel) => emit('quickTunnel', { tunnel }))
+
 
 /* ---- request handling --------------------------------------------- */
 
@@ -118,6 +122,24 @@ async function handle(req: RpcRequest): Promise<unknown> {
       const { tunnelId } = req.params as { tunnelId: string }
       return { stopped: await supervisor.stop(`cloudflared:${tunnelId}`) }
     }
+
+    /* ---- quick tunnels (trycloudflare) ------------------------------ */
+
+    case 'quickTunnel.start': {
+      const { targetUrl, id } = req.params as { targetUrl: string; id?: string }
+      const tunnel = quickTunnels.start(targetUrl, id)
+      return { tunnel }
+    }
+
+    case 'quickTunnel.stop': {
+      const { id } = req.params as { id: string }
+      const stopped = await quickTunnels.stop(id)
+      return { stopped }
+    }
+
+    case 'quickTunnel.list':
+      return { tunnels: quickTunnels.list() }
+
 
     /* ---- account management ----------------------------------------- */
 

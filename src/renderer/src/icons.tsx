@@ -154,3 +154,29 @@ export function IconLink(props: SVGProps<SVGSVGElement>) {
     </Icon>
   )
 }
+
+export function IconBolt(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M9 1.5 2.5 9h5L6.5 14.5 13.5 7h-5L9 1.5Z" strokeLinecap="round" strokeLinejoin="round" />
+    </Icon>
+  )
+}
+
+export function IconCopy(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1" />
+      <path d="M3 10.5V3.8a.8.8 0 0 1 .8-.8h6.7" strokeLinecap="round" strokeLinejoin="round" />
+    </Icon>
+  )
+}
+
+export function IconStop(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="3.5" y="3.5" width="9" height="9" rx="1" />
+    </Icon>
+  )
+}
+

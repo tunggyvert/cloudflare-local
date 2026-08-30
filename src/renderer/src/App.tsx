@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Orphan, Resource } from '../../shared/model'
+import type { Orphan, QuickTunnel, Resource } from '../../shared/model'
 import type { RpcEvent } from '../../shared/protocol'
 import { AccountBadge } from './components/AccountBadge'
 import { OnboardingModal } from './components/OnboardingModal'
@@ -11,6 +11,7 @@ import { DnsView } from './views/DnsView'
 import type { LogEntry } from './views/LogsView'
 import { LogsView } from './views/LogsView'
 import { OrphansView } from './views/OrphansView'
+import { QuickTunnelView } from './views/QuickTunnelView'
 import { TunnelsView } from './views/TunnelsView'
 import type { View } from './views/types'
 
@@ -20,6 +21,7 @@ export default function App() {
 
   const [resources, setResources] = useState<Resource[]>([])
   const [orphans, setOrphans] = useState<Orphan[]>([])
+  const [quickTunnels, setQuickTunnels] = useState<QuickTunnel[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -35,6 +37,17 @@ export default function App() {
         if (ev.event === 'log') {
           const entry = ev.payload as LogEntry
           setLogs((prev) => [...prev.slice(-200), entry])
+        } else if (ev.event === 'quickTunnel') {
+          const { tunnel } = ev.payload as { tunnel: QuickTunnel }
+          setQuickTunnels((prev) => {
+            const idx = prev.findIndex((t) => t.id === tunnel.id)
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = tunnel
+              return next
+            }
+            return [...prev, tunnel]
+          })
         }
       }),
     [],
@@ -66,6 +79,8 @@ export default function App() {
       setResources(resources)
       const { orphans } = await window.core.invoke('orphans', undefined)
       setOrphans(orphans)
+      const { tunnels } = await window.core.invoke('quickTunnel.list', undefined)
+      setQuickTunnels(tunnels)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -93,6 +108,28 @@ export default function App() {
     setConfigured(false)
     setAccountLabel(undefined)
     await refresh()
+  }
+
+  async function handleStartQuickTunnel(targetUrl: string) {
+    const { tunnel } = await window.core.invoke('quickTunnel.start', { targetUrl })
+    setQuickTunnels((prev) => {
+      const idx = prev.findIndex((t) => t.id === tunnel.id)
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = tunnel
+        return next
+      }
+      return [...prev, tunnel]
+    })
+  }
+
+  async function handleStopQuickTunnel(id: string) {
+    await window.core.invoke('quickTunnel.stop', { id })
+  }
+
+  async function handleExposeContainer(originAddress: string) {
+    await handleStartQuickTunnel(originAddress)
+    navigate('quick-tunnel')
   }
 
   const containers = resources.filter((r) => r.type === 'container')
@@ -144,6 +181,7 @@ export default function App() {
               tunnels={tunnels}
               dnsRecords={dnsRecords}
               orphans={orphans}
+              quickTunnels={quickTunnels}
               logs={logs}
               busy={busy}
               error={error}
@@ -153,8 +191,26 @@ export default function App() {
               onConnect={() => setShowOnboarding(true)}
             />
           )}
+          {view === 'quick-tunnel' && (
+            <QuickTunnelView
+              quickTunnels={quickTunnels}
+              containers={containers}
+              logs={logs}
+              busy={busy}
+              error={error}
+              onStart={handleStartQuickTunnel}
+              onStop={handleStopQuickTunnel}
+              onRescan={refresh}
+            />
+          )}
           {view === 'containers' && (
-            <ContainersView containers={containers} busy={busy} error={error} onRescan={refresh} />
+            <ContainersView
+              containers={containers}
+              busy={busy}
+              error={error}
+              onRescan={refresh}
+              onStartQuickTunnel={handleExposeContainer}
+            />
           )}
           {view === 'tunnels' && <TunnelsView tunnels={tunnels} busy={busy} error={error} onRescan={refresh} />}
           {view === 'dns' && <DnsView dnsRecords={dnsRecords} tunnels={tunnels} busy={busy} error={error} onRescan={refresh} />}
@@ -167,3 +223,4 @@ export default function App() {
     </div>
   )
 }
+
