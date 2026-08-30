@@ -6,9 +6,6 @@ them** — the containers, ports, and nginx blocks on your own machine.
 > A dashboard that mirrors Cloudflare's dashboard has no reason to exist.
 > A tool that owns the seam between your laptop and the edge does.
 
-Design notes and decisions live in
-[cloudflare-tung-brain](https://github.com/tunggyvert/cloudflare-tung-brain).
-
 ## Status
 
 **v0.1, in progress.** The scaffold builds and the core service is verified
@@ -74,8 +71,6 @@ pnpm dist       # package installers
   `node node_modules/electron/install.js`.
 - The package is ESM (`"type": "module"`), so build output is `.js` and
   `__dirname` does not exist — use `import.meta.dirname`.
-
-More in [docs/03-tech-stack.md](https://github.com/tunggyvert/cloudflare-tung-brain/blob/main/docs/03-tech-stack.md).
 
 ## Architecture
 
