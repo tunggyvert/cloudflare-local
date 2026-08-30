@@ -15,6 +15,32 @@ export interface CoreRequests {
   /** Start/stop a supervised cloudflared process. */
   'tunnel.run': { req: { tunnelId: string }; res: { pid: number } }
   'tunnel.stop': { req: { tunnelId: string }; res: { stopped: boolean } }
+
+  /** Save a Cloudflare API token + account ID to the OS keychain. */
+  'account.save': {
+    req: { accountId: string; apiToken: string; label?: string }
+    res: { ok: boolean; error?: string }
+  }
+  /** Check whether a Cloudflare account is configured and reachable. */
+  'account.status': {
+    req: void
+    res: { configured: boolean; accountId?: string; label?: string; reachable?: boolean; detail?: string }
+  }
+  /** Remove saved Cloudflare credentials. */
+  'account.remove': {
+    req: void
+    res: { ok: boolean }
+  }
+  /** Validate a token by calling the Cloudflare API (before saving). */
+  'account.validate': {
+    req: { accountId: string; apiToken: string }
+    res: { ok: boolean; detail?: string }
+  }
+  /** Execute approved orphan cleanup changes. Separate from `apply` to respect the plan gate. */
+  'orphan.cleanup': {
+    req: { changeIds: string[] }
+    res: { results: ApplyResult[] }
+  }
 }
 
 export type CoreMethod = keyof CoreRequests

@@ -13,7 +13,7 @@ import { DockerProvider } from './providers/docker'
 import { CloudflareProvider } from './providers/cloudflare'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
-import { readToken } from './secrets'
+import { readToken, saveToken, deleteToken } from './secrets'
 import type { Provider } from './providers/types'
 import type { Resource, Service } from '../shared/model'
 import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/protocol'
@@ -21,7 +21,33 @@ import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/p
 const VERSION = '0.0.1'
 
 const supervisor = new Supervisor()
-const providers: Provider[] = [new DockerProvider()]
+const docker = new DockerProvider()
+let cloudflare: CloudflareProvider | null = null
+let accountMeta: { accountId: string; label: string } | null = null
+
+/** Build the active provider list dynamically based on what's configured. */
+function activeProviders(): Provider[] {
+  return cloudflare ? [docker, cloudflare] : [docker]
+}
+
+/**
+ * Try to restore Cloudflare credentials from the OS keychain on startup.
+ * Account metadata (accountId + label) is stored as a JSON string under a
+ * well-known keyring key so we can look up the real token on next launch.
+ */
+function restoreAccount(): void {
+  const metaRaw = readToken('__account_meta__')
+  if (!metaRaw) return
+  try {
+    const meta = JSON.parse(metaRaw) as { accountId: string; label: string }
+    const token = readToken(meta.accountId)
+    if (!token) return
+    cloudflare = new CloudflareProvider({ apiToken: token, accountId: meta.accountId })
+    accountMeta = meta
+  } catch {
+    /* corrupt meta — user must re-onboard */
+  }
+}
 
 let lastDiscovery: Resource[] = []
 
@@ -46,13 +72,14 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return { ok: true, version: VERSION }
 
     case 'discover': {
-      const results = await Promise.allSettled(providers.map((p) => p.discover()))
+      const providerList = activeProviders()
+      const results = await Promise.allSettled(providerList.map((p) => p.discover()))
       lastDiscovery = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
 
       for (const [i, r] of results.entries()) {
         if (r.status === 'rejected') {
           emit('process', {
-            source: providers[i].id,
+            source: providerList[i].id,
             state: 'crashed',
             detail: `discover failed: ${r.reason}`,
           })
@@ -90,6 +117,93 @@ async function handle(req: RpcRequest): Promise<unknown> {
     case 'tunnel.stop': {
       const { tunnelId } = req.params as { tunnelId: string }
       return { stopped: await supervisor.stop(`cloudflared:${tunnelId}`) }
+    }
+
+    /* ---- account management ----------------------------------------- */
+
+    case 'account.validate': {
+      const { accountId, apiToken } = req.params as { accountId: string; apiToken: string }
+      const temp = new CloudflareProvider({ apiToken, accountId })
+      const result = await temp.available()
+      return { ok: result.ok, detail: result.detail }
+    }
+
+    case 'account.save': {
+      const { accountId, apiToken, label } = req.params as {
+        accountId: string; apiToken: string; label?: string
+      }
+      try {
+        saveToken(accountId, apiToken)
+        const meta = { accountId, label: label ?? accountId }
+        // Store account metadata so we can restore on next launch
+        saveToken('__account_meta__', JSON.stringify(meta))
+        cloudflare = new CloudflareProvider({ apiToken, accountId })
+        accountMeta = meta
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+
+    case 'account.status': {
+      if (!cloudflare || !accountMeta) {
+        return { configured: false }
+      }
+      try {
+        const avail = await cloudflare.available()
+        return {
+          configured: true,
+          accountId: accountMeta.accountId,
+          label: accountMeta.label,
+          reachable: avail.ok,
+          detail: avail.detail,
+        }
+      } catch {
+        return {
+          configured: true,
+          accountId: accountMeta.accountId,
+          label: accountMeta.label,
+          reachable: false,
+          detail: 'failed to check reachability',
+        }
+      }
+    }
+
+    case 'account.remove': {
+      if (accountMeta) {
+        deleteToken(accountMeta.accountId)
+        deleteToken('__account_meta__')
+      }
+      cloudflare = null
+      accountMeta = null
+      lastDiscovery = lastDiscovery.filter((r) => r.provider !== 'cloudflare')
+      return { ok: true }
+    }
+
+    /* ---- orphan cleanup --------------------------------------------- */
+
+    case 'orphan.cleanup': {
+      // This is the ONLY write path in v0.1 — orphan cleanup deletes.
+      // It bypasses the general `apply` gate but still requires each change
+      // to have been generated by the orphan detector.
+      const { changeIds } = req.params as { changeIds: string[] }
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+
+      const orphans = detectOrphans(lastDiscovery)
+      const validChanges = orphans
+        .filter((o) => changeIds.includes(o.cleanup.id))
+        .map((o) => o.cleanup)
+
+      if (validChanges.length !== changeIds.length) {
+        throw new Error(
+          `${changeIds.length - validChanges.length} change(s) are not valid orphan cleanup operations`,
+        )
+      }
+
+      const results = await Promise.all(
+        validChanges.map((change) => cloudflare!.apply(change)),
+      )
+      return { results }
     }
 
     default:
@@ -167,8 +281,7 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('disconnect', shutdown)
 
-send({ kind: 'event', event: 'process', payload: { source: 'core', state: 'running' } } as RpcEvent)
+// Restore saved account from OS keychain, then announce readiness.
+restoreAccount()
 
-// Referenced so the bundler keeps them; wired up when onboarding lands in v0.1.
-void CloudflareProvider
-void readToken
+send({ kind: 'event', event: 'process', payload: { source: 'core', state: 'running' } } as RpcEvent)
