@@ -30,7 +30,22 @@ export class CloudflareProvider implements Provider {
 
   async available() {
     try {
-      await this.client.accounts.get({ account_id: this.cfg.accountId })
+      // Use token/verify instead of accounts.get — the latter requires the
+      // "Account Settings: Read" permission which this app doesn't need or
+      // ask the user to grant, causing a 403 (error 9109) on validation.
+      const verify = await this.client.user.tokens.verify()
+      if (verify.status !== 'active') {
+        return { ok: false, detail: `token status: ${verify.status}` }
+      }
+      // Confirm the accountId is reachable with the granted permissions by
+      // listing tunnels (the app already requires Tunnel:Read).
+      const tunnels = this.client.zeroTrust.tunnels.list({
+        account_id: this.cfg.accountId,
+        per_page: 1,
+      })
+      // Consume at most one item to prove access works.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _t of tunnels) break
       return { ok: true }
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : 'cloudflare unreachable' }
