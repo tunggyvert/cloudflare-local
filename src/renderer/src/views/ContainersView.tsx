@@ -45,7 +45,8 @@ export function ContainersView({
             const tone = toneFromText(state)
             const originAddress = c.origins?.[0]?.address
             const isRunning = state === 'running'
-            const labelHostname = c.meta?.['cloudflare.hostname']
+            const labelHostname = c.meta?.['dockflare_hostname'] || c.meta?.['cloudflare.hostname']
+            const labelTunnel = c.meta?.['dockflare_tunnel'] || c.meta?.['cloudflare.tunnel']
 
             return (
               <Tr key={c.id}>
@@ -55,10 +56,11 @@ export function ContainersView({
                     <span className="font-medium">{c.name}</span>
                     {labelHostname && (
                       <span
-                        className="rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] font-medium text-accent-strong"
-                        title={`DockFlare label: ${labelHostname}`}
+                        className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] font-medium text-accent-strong"
+                        title={`DockFlare label configuration: ${labelHostname}${labelTunnel ? ` (Tunnel: ${labelTunnel})` : ''}`}
                       >
-                        🏷️ {labelHostname}
+                        <span>🏷️</span>
+                        <span>{labelHostname}</span>
                       </span>
                     )}
                   </div>

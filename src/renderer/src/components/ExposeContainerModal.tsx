@@ -40,15 +40,17 @@ export function ExposeContainerModal({
 
     setError(null)
     setSuccess(null)
-    setPath('')
 
-    // 1. Determine origin address default
-    const defaultOrigin = container.origins?.[0]?.address ?? 'http://localhost:8080'
+    // 1. Determine origin address default (prefer dockflare_service / port if present)
+    const labelService = container.meta?.['dockflare_service'] || container.meta?.['cloudflare.service']
+    const defaultOrigin = labelService ?? container.origins?.[0]?.address ?? 'http://localhost:8080'
     setOriginService(defaultOrigin)
 
     // 2. Determine default tunnel
-    const labelTunnel = container.meta?.['cloudflare.tunnel']
-    const matchingTunnel = tunnels.find((t) => t.id === labelTunnel || t.name === labelTunnel || t.meta?.tunnelId === labelTunnel)
+    const labelTunnel = container.meta?.['dockflare_tunnel'] || container.meta?.['cloudflare.tunnel']
+    const matchingTunnel = tunnels.find(
+      (t) => t.id === labelTunnel || t.name === labelTunnel || t.meta?.tunnelId === labelTunnel
+    )
     if (matchingTunnel?.meta?.tunnelId) {
       setSelectedTunnelId(matchingTunnel.meta.tunnelId)
     } else if (tunnels.length > 0 && tunnels[0].meta?.tunnelId) {
@@ -57,8 +59,12 @@ export function ExposeContainerModal({
       setSelectedTunnelId('')
     }
 
-    // 3. Check for dockflare label for hostname
-    const labelHostname = container.meta?.['cloudflare.hostname']
+    // 3. Path routing
+    const labelPath = container.meta?.['dockflare_path'] || container.meta?.['cloudflare.path'] || ''
+    setPath(labelPath)
+
+    // 4. Check for dockflare label for hostname
+    const labelHostname = container.meta?.['dockflare_hostname'] || container.meta?.['cloudflare.hostname']
     if (labelHostname) {
       const parts = labelHostname.split('.')
       if (parts.length > 2) {
@@ -83,7 +89,9 @@ export function ExposeContainerModal({
       setZones(res.zones)
       if (res.zones.length > 0) {
         if (prefillHostname) {
-          const matchedZone = res.zones.find((z) => prefillHostname === z.name || prefillHostname.endsWith(`.${z.name}`))
+          const matchedZone = res.zones.find(
+            (z) => prefillHostname === z.name || prefillHostname.endsWith(`.${z.name}`)
+          )
           if (matchedZone) {
             setSelectedZoneId(matchedZone.id)
             if (prefillHostname !== matchedZone.name) {
@@ -115,10 +123,12 @@ export function ExposeContainerModal({
       : subdomain.trim().toLowerCase()
 
   const selectedTunnel = tunnels.find((t) => t.meta?.tunnelId === selectedTunnelId)
+  const labelHostname = container.meta?.['dockflare_hostname'] || container.meta?.['cloudflare.hostname']
+  const labelTunnel = container.meta?.['dockflare_tunnel'] || container.meta?.['cloudflare.tunnel']
+  const labelService = container.meta?.['dockflare_service'] || container.meta?.['cloudflare.service']
+  const labelPath = container.meta?.['dockflare_path'] || container.meta?.['cloudflare.path']
   const hasLabels = Boolean(
-    container.meta?.['cloudflare.hostname'] ||
-    container.meta?.['cloudflare.tunnel'] ||
-    container.meta?.['cloudflare.port']
+    labelHostname || labelTunnel || labelService || labelPath || container.meta?.['dockflare_enabled']
   )
 
   async function handleSubmit(e: React.FormEvent) {
@@ -206,9 +216,17 @@ export function ExposeContainerModal({
 
           {/* DockFlare Label Banner if present */}
           {hasLabels && (
-            <div className="flex items-center gap-2 rounded border border-accent/30 bg-accent/5 px-3 py-2 type-body-sm text-ink">
-              <IconBolt className="h-4 w-4 text-accent-strong shrink-0" />
-              <span>Detected DockFlare labels on this container. Pre-populated settings below.</span>
+            <div className="rounded border border-accent/30 bg-accent/5 p-3 space-y-1.5 type-body-sm text-ink">
+              <div className="flex items-center gap-1.5 font-medium text-accent-strong">
+                <IconBolt className="h-4 w-4 shrink-0" />
+                <span>Detected DockFlare labels</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 type-code-sm text-ink-secondary text-[11px]">
+                {labelHostname && <div>hostname: <strong className="text-ink">{labelHostname}</strong></div>}
+                {labelTunnel && <div>tunnel: <strong className="text-ink">{labelTunnel}</strong></div>}
+                {labelService && <div>service: <strong className="text-ink">{labelService}</strong></div>}
+                {labelPath && <div>path: <strong className="text-ink">{labelPath}</strong></div>}
+              </div>
             </div>
           )}
 
