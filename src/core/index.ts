@@ -14,6 +14,7 @@ import { CloudflareProvider } from './providers/cloudflare'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
 import { QuickTunnelManager } from './quick-tunnel'
+import { LocalCacheStore } from './cache/store'
 import { readToken, saveToken, deleteToken } from './secrets'
 import type { Provider } from './providers/types'
 import type { Resource, Service } from '../shared/model'
@@ -24,6 +25,7 @@ const VERSION = '0.0.1'
 const supervisor = new Supervisor()
 const quickTunnels = new QuickTunnelManager(supervisor)
 const docker = new DockerProvider()
+const cache = new LocalCacheStore()
 let cloudflare: CloudflareProvider | null = null
 let accountMeta: { accountId: string; label: string } | null = null
 
@@ -51,7 +53,8 @@ function restoreAccount(): void {
   }
 }
 
-let lastDiscovery: Resource[] = []
+// Initial state loaded from SQLite cache for instant startup
+let lastDiscovery: Resource[] = cache.loadResources()
 
 /* ---- transport ---------------------------------------------------- */
 
@@ -87,6 +90,9 @@ async function runDiscovery(): Promise<Resource[]> {
       })
     }
   }
+
+  // Persist latest state to SQLite cache
+  cache.saveResources(lastDiscovery)
 
   emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
   return lastDiscovery
@@ -208,7 +214,9 @@ async function handle(req: RpcRequest): Promise<unknown> {
       }
       cloudflare = null
       accountMeta = null
+      cache.clear()
       lastDiscovery = lastDiscovery.filter((r) => r.provider !== 'cloudflare')
+      cache.saveResources(lastDiscovery)
       return { ok: true }
     }
 
@@ -331,6 +339,7 @@ process.on('message', async (msg: CoreMessage) => {
 /** Nothing this process started may outlive it. */
 async function shutdown(): Promise<void> {
   docker.stopEventListener()
+  cache.close()
   await supervisor.stopAll()
   process.exit(0)
 }

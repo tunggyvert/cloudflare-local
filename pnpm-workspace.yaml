@@ -2,6 +2,7 @@
 # extras we do not use (ssh2/cpu-features are dockerode's SSH transport — we
 # talk to the local socket — and electron-winstaller only matters on Windows).
 allowBuilds:
+  better-sqlite3: true
   cpu-features: false
   electron-winstaller: false
   electron: true
