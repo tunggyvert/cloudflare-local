@@ -66,7 +66,31 @@ function emit<E extends RpcEvent['event']>(event: E, payload: unknown): void {
 supervisor.on('log', (e) => emit('log', e))
 supervisor.on('state', (e) => emit('process', e))
 quickTunnels.on('update', (tunnel) => emit('quickTunnel', { tunnel }))
+docker.on('container', (e) => {
+  emit('container', e)
+  // Automatically refresh discovery in background when container lifecycle changes
+  void runDiscovery()
+})
 
+/** Core discovery runner */
+async function runDiscovery(): Promise<Resource[]> {
+  const providerList = activeProviders()
+  const results = await Promise.allSettled(providerList.map((p) => p.discover()))
+  lastDiscovery = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+
+  for (const [i, r] of results.entries()) {
+    if (r.status === 'rejected') {
+      emit('process', {
+        source: providerList[i].id,
+        state: 'crashed',
+        detail: `discover failed: ${r.reason}`,
+      })
+    }
+  }
+
+  emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
+  return lastDiscovery
+}
 
 /* ---- request handling --------------------------------------------- */
 
@@ -76,22 +100,8 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return { ok: true, version: VERSION }
 
     case 'discover': {
-      const providerList = activeProviders()
-      const results = await Promise.allSettled(providerList.map((p) => p.discover()))
-      lastDiscovery = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
-
-      for (const [i, r] of results.entries()) {
-        if (r.status === 'rejected') {
-          emit('process', {
-            source: providerList[i].id,
-            state: 'crashed',
-            detail: `discover failed: ${r.reason}`,
-          })
-        }
-      }
-
-      emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
-      return { resources: lastDiscovery }
+      const resources = await runDiscovery()
+      return { resources }
     }
 
     case 'services':
@@ -249,16 +259,7 @@ async function handle(req: RpcRequest): Promise<unknown> {
       }
       const result = await cloudflare.exposeHostname(params)
       // Trigger background discovery update so the UI immediately receives new state
-      void (async () => {
-        try {
-          const providerList = activeProviders()
-          const results = await Promise.allSettled(providerList.map((p) => p.discover()))
-          lastDiscovery = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
-          emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
-        } catch {
-          /* background refresh error */
-        }
-      })()
+      void runDiscovery()
       return result
     }
 
@@ -329,6 +330,7 @@ process.on('message', async (msg: CoreMessage) => {
 
 /** Nothing this process started may outlive it. */
 async function shutdown(): Promise<void> {
+  docker.stopEventListener()
   await supervisor.stopAll()
   process.exit(0)
 }
@@ -337,7 +339,8 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('disconnect', shutdown)
 
-// Restore saved account from OS keychain, then announce readiness.
+// Restore saved account from OS keychain, start Docker event listener, then announce readiness.
 restoreAccount()
+void docker.startEventListener()
 
 send({ kind: 'event', event: 'process', payload: { source: 'core', state: 'running' } } as RpcEvent)

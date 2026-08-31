@@ -80,6 +80,14 @@ export interface CoreEvents {
   'discovered': { count: number; at: string }
   /** Quick tunnel status or public URL updated. */
   'quickTunnel': { tunnel: QuickTunnel }
+  /** Real-time Docker container lifecycle event. */
+  'container': {
+    action: 'start' | 'stop' | 'die' | 'destroy' | 'create' | 'rename' | string
+    containerId: string
+    name?: string
+    image?: string
+    at: string
+  }
 }
 
 

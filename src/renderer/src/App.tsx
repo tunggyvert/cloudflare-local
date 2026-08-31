@@ -53,6 +53,36 @@ export default function App() {
             }
             return [...prev, tunnel]
           })
+        } else if (ev.event === 'container') {
+          const cEvent = ev.payload as { action: string; name?: string; at: string }
+          setLogs((prev) => [
+            ...prev.slice(-200),
+            {
+              source: 'docker',
+              stream: 'stdout',
+              line: `container ${cEvent.name ? `"${cEvent.name}"` : ''} ${cEvent.action}`,
+              at: cEvent.at,
+            },
+          ])
+          void (async () => {
+            try {
+              const { resources } = await window.core.invoke('discover', {})
+              setResources(resources)
+              const { orphans } = await window.core.invoke('orphans', undefined)
+              setOrphans(orphans)
+            } catch {
+              /* ignore */
+            }
+          })()
+        } else if (ev.event === 'discovered') {
+          void (async () => {
+            try {
+              const { orphans } = await window.core.invoke('orphans', undefined)
+              setOrphans(orphans)
+            } catch {
+              /* ignore */
+            }
+          })()
         }
       }),
     [],

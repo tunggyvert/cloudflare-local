@@ -1,15 +1,28 @@
+import { EventEmitter } from 'node:events'
 import Docker from 'dockerode'
 import { parseDockFlareLabels } from './docker-labels'
 import type { Provider } from './types'
 import type { ApplyResult, Change, IaCFragment, Origin, Resource } from '../../shared/model'
 
-export class DockerProvider implements Provider {
+export interface ContainerLifecycleEvent {
+  action: 'start' | 'stop' | 'die' | 'destroy' | 'create' | 'rename' | string
+  containerId: string
+  name?: string
+  image?: string
+  at: string
+}
+
+export class DockerProvider extends EventEmitter implements Provider {
   readonly id = 'docker' as const
   readonly label = 'Docker'
 
   private docker: Docker
+  private eventStream: NodeJS.ReadableStream | null = null
+  private listening = false
+  private reconnectTimer: NodeJS.Timeout | null = null
 
   constructor(socketPath?: string) {
+    super()
     this.docker = socketPath ? new Docker({ socketPath }) : new Docker()
   }
 
@@ -20,6 +33,104 @@ export class DockerProvider implements Provider {
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : 'docker unreachable' }
     }
+  }
+
+  /**
+   * Start listening to real-time container lifecycle events from Docker daemon.
+   */
+  async startEventListener(): Promise<void> {
+    if (this.listening) return
+    this.listening = true
+    await this.attachEventStream()
+  }
+
+  private async attachEventStream(): Promise<void> {
+    if (!this.listening) return
+    try {
+      const avail = await this.available()
+      if (!avail.ok) {
+        this.scheduleReconnect()
+        return
+      }
+
+      const stream = await this.docker.getEvents({
+        filters: { type: ['container'] },
+      })
+      this.eventStream = stream
+
+      let buffer = ''
+      stream.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8')
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const raw = JSON.parse(line) as {
+              Type?: string
+              Action?: string
+              Actor?: { ID?: string; Attributes?: { name?: string; image?: string } }
+              time?: number
+            }
+            if (raw.Type === 'container' && raw.Action && raw.Actor?.ID) {
+              const event: ContainerLifecycleEvent = {
+                action: raw.Action,
+                containerId: raw.Actor.ID,
+                name: raw.Actor.Attributes?.name,
+                image: raw.Actor.Attributes?.image,
+                at: raw.time ? new Date(raw.time * 1000).toISOString() : new Date().toISOString(),
+              }
+              this.emit('container', event)
+            }
+          } catch {
+            // ignore JSON parse error on incomplete chunks
+          }
+        }
+      })
+
+      stream.on('error', () => {
+        this.cleanupEventStream()
+        this.scheduleReconnect()
+      })
+
+      stream.on('end', () => {
+        this.cleanupEventStream()
+        this.scheduleReconnect()
+      })
+    } catch {
+      this.cleanupEventStream()
+      this.scheduleReconnect()
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.listening || this.reconnectTimer) return
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      void this.attachEventStream()
+    }, 5000)
+  }
+
+  private cleanupEventStream(): void {
+    if (this.eventStream) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (this.eventStream as any).destroy?.()
+      } catch {
+        // ignore
+      }
+      this.eventStream = null
+    }
+  }
+
+  stopEventListener(): void {
+    this.listening = false
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.cleanupEventStream()
   }
 
   async discover(): Promise<Resource[]> {
