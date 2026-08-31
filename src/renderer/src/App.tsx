@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Orphan, QuickTunnel, Resource } from '../../shared/model'
 import type { RpcEvent } from '../../shared/protocol'
 import { AccountBadge } from './components/AccountBadge'
+import { ExposeContainerModal } from './components/ExposeContainerModal'
 import { OnboardingModal } from './components/OnboardingModal'
 import { Sidebar } from './components/Sidebar'
 import { IconMenu } from './icons'
@@ -30,6 +31,10 @@ export default function App() {
   const [configured, setConfigured] = useState<boolean | null>(null) // null = loading
   const [accountLabel, setAccountLabel] = useState<string | undefined>()
   const [showOnboarding, setShowOnboarding] = useState(false)
+
+  // Container expose modal state
+  const [exposeModalOpen, setExposeModalOpen] = useState(false)
+  const [selectedContainerForExpose, setSelectedContainerForExpose] = useState<Resource | null>(null)
 
   useEffect(
     () =>
@@ -132,6 +137,11 @@ export default function App() {
     navigate('quick-tunnel')
   }
 
+  function handleOpenExposeModal(container: Resource) {
+    setSelectedContainerForExpose(container)
+    setExposeModalOpen(true)
+  }
+
   const containers = resources.filter((r) => r.type === 'container')
   const tunnels = resources.filter((r) => r.type === 'tunnel')
   const dnsRecords = resources.filter((r) => r.type === 'dns_record')
@@ -210,6 +220,7 @@ export default function App() {
               error={error}
               onRescan={refresh}
               onStartQuickTunnel={handleExposeContainer}
+              onExposeContainer={handleOpenExposeModal}
             />
           )}
           {view === 'tunnels' && <TunnelsView tunnels={tunnels} busy={busy} error={error} onRescan={refresh} />}
@@ -220,6 +231,13 @@ export default function App() {
       </div>
 
       <OnboardingModal open={showOnboarding} onConnected={handleConnected} />
+      <ExposeContainerModal
+        container={selectedContainerForExpose}
+        tunnels={tunnels}
+        open={exposeModalOpen}
+        onClose={() => setExposeModalOpen(false)}
+        onExposed={refresh}
+      />
     </div>
   )
 }
