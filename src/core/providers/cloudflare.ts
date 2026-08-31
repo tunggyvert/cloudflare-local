@@ -151,10 +151,145 @@ export class CloudflareProvider implements Provider {
     return out
   }
 
+  async listZones(): Promise<Array<{ id: string; name: string }>> {
+    const out: Array<{ id: string; name: string }> = []
+    const zoneIds = this.cfg.zoneIds?.length ? this.cfg.zoneIds : undefined
+
+    for await (const z of this.client.zones.list()) {
+      if (z.id && z.name) {
+        if (!zoneIds || zoneIds.includes(z.id)) {
+          out.push({ id: z.id, name: z.name })
+        }
+      }
+    }
+    return out
+  }
+
   private async allZoneIds(): Promise<string[]> {
     const ids: string[] = []
     for await (const z of this.client.zones.list()) if (z.id) ids.push(z.id)
     return ids
+  }
+
+  /**
+   * Exposes an origin service at a real public hostname:
+   * 1. Adds or updates the ingress rule on the remotely-managed Cloudflare tunnel.
+   * 2. Creates or updates the proxied DNS CNAME record pointing at <tunnel-uuid>.cfargotunnel.com.
+   */
+  async exposeHostname(params: {
+    tunnelId: string
+    hostname: string
+    service: string
+    path?: string
+    zoneId?: string
+  }): Promise<{ ok: boolean; ingressAdded: boolean; dnsCreated: boolean; hostname: string }> {
+    const { tunnelId, hostname, service, path } = params
+    if (!tunnelId) throw new Error('Tunnel ID is required')
+    if (!hostname) throw new Error('Hostname is required')
+    if (!service) throw new Error('Origin service is required')
+
+    let ingressAdded = false
+    let dnsCreated = false
+
+    // 1. Ingress Rule in Tunnel Configuration
+    try {
+      const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
+        tunnelId,
+        { account_id: this.cfg.accountId }
+      )
+      const currentIngress = (existing?.config?.ingress ?? []) as Array<{
+        hostname?: string
+        path?: string
+        service: string
+      }>
+
+      // Remove existing rule for this hostname/path if already present to update it
+      const filtered = currentIngress.filter(
+        (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
+      )
+
+      // Ensure the 404 catch-all is at the end, or create one if none exists
+      const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
+      const nonCatchAll = filtered.filter((r) => r.hostname)
+
+      const newRule: { hostname: string; service: string; path?: string } = {
+        hostname,
+        service,
+      }
+      if (path) newRule.path = path
+
+      const updatedIngress = [...nonCatchAll, newRule, catchAll]
+
+      await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
+        tunnelId,
+        {
+          account_id: this.cfg.accountId,
+          config: {
+            ...existing?.config,
+            ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
+          },
+        }
+      )
+      ingressAdded = true
+    } catch (err) {
+      throw new Error(`Failed to update tunnel ingress configuration: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 2. DNS CNAME Record in Zone
+    try {
+      let targetZoneId = params.zoneId
+      if (!targetZoneId) {
+        // Auto-detect zone by finding matching suffix (longest match)
+        const zones = await this.listZones()
+        const matched = zones
+          .filter((z) => hostname === z.name || hostname.endsWith(`.${z.name}`))
+          .sort((a, b) => b.name.length - a.name.length)[0]
+        if (matched) {
+          targetZoneId = matched.id
+        }
+      }
+
+      if (targetZoneId) {
+        const cnameTarget = `${tunnelId}.cfargotunnel.com`
+        let existingRecordId: string | null = null
+
+        for await (const r of this.client.dns.records.list({
+          zone_id: targetZoneId,
+          type: 'CNAME',
+          name: { exact: hostname },
+        })) {
+          if (r.type === 'CNAME') {
+            existingRecordId = r.id ?? null
+            break
+          }
+        }
+
+        if (existingRecordId) {
+          await this.client.dns.records.update(existingRecordId, {
+            zone_id: targetZoneId,
+            type: 'CNAME',
+            name: hostname,
+            content: cnameTarget,
+            proxied: true,
+            ttl: 1,
+          })
+        } else {
+          await this.client.dns.records.create({
+            zone_id: targetZoneId,
+            type: 'CNAME',
+            name: hostname,
+            content: cnameTarget,
+            proxied: true,
+            ttl: 1,
+          })
+        }
+        dnsCreated = true
+      }
+    } catch (err) {
+      throw new Error(`Ingress configured, but DNS record update failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    return { ok: true, ingressAdded, dnsCreated, hostname }
   }
 
   async plan(): Promise<Change[]> {

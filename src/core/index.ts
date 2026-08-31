@@ -228,6 +228,40 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return { results }
     }
 
+    /* ---- zones & container expose ----------------------------------- */
+
+    case 'zones.list': {
+      if (!cloudflare) return { zones: [] }
+      const zones = await cloudflare.listZones()
+      return { zones }
+    }
+
+    case 'container.expose': {
+      if (!cloudflare) {
+        throw new Error('No Cloudflare account configured. Please connect your account first.')
+      }
+      const params = req.params as {
+        tunnelId: string
+        hostname: string
+        service: string
+        path?: string
+        zoneId?: string
+      }
+      const result = await cloudflare.exposeHostname(params)
+      // Trigger background discovery update so the UI immediately receives new state
+      void (async () => {
+        try {
+          const providerList = activeProviders()
+          const results = await Promise.allSettled(providerList.map((p) => p.discover()))
+          lastDiscovery = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+          emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
+        } catch {
+          /* background refresh error */
+        }
+      })()
+      return result
+    }
+
     default:
       throw new Error(`unknown method: ${String(req.method)}`)
   }

@@ -32,6 +32,16 @@ export interface CoreRequests {
     res: { tunnels: QuickTunnel[] }
   }
 
+  /** List available Cloudflare DNS zones. */
+  'zones.list': {
+    req: void
+    res: { zones: Array<{ id: string; name: string }> }
+  }
+  /** Expose a container at a real hostname via Cloudflare Tunnel ingress & DNS CNAME. */
+  'container.expose': {
+    req: { tunnelId: string; hostname: string; service: string; path?: string; zoneId?: string }
+    res: { ok: boolean; ingressAdded: boolean; dnsCreated: boolean; hostname: string }
+  }
   /** Save a Cloudflare API token + account ID to the OS keychain. */
   'account.save': {
     req: { accountId: string; apiToken: string; label?: string }
