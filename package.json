@@ -15,6 +15,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "node scripts/check-core-isolation.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node scripts/test-docker-labels.mjs",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder",
     "check:core": "node scripts/check-core-isolation.mjs"
