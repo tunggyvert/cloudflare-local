@@ -7,3 +7,6 @@ release/
 .env
 .env.local
 *.tsbuildinfo
+.claude
+.impeccable
+PRODUCT.md
