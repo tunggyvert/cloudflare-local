@@ -133,3 +133,141 @@ export interface QuickTunnel {
   error?: string
 }
 
+/* =========================================================================
+ * v0.3 Models: Workers, Bindings (KV/R2/D1), Local Explorer, Nginx
+ * ========================================================================= */
+
+export interface WorkerBinding {
+  type: 'kv_namespace' | 'r2_bucket' | 'd1' | 'secret_text' | 'plain_text' | 'service' | 'queue' | string
+  name: string
+  targetId?: string
+  details?: Record<string, unknown>
+}
+
+export interface WorkerSummary {
+  id: string
+  name: string
+  createdOn?: string
+  modifiedOn?: string
+  etag?: string
+  routes?: string[]
+  domains?: string[]
+  bindings?: WorkerBinding[]
+  compatibilityDate?: string
+  logpush?: boolean
+}
+
+export interface WorkerTailEvent {
+  id: string
+  scriptName: string
+  eventTimestamp: string
+  outcome: 'ok' | 'exception' | 'exceededCpu' | 'canceled' | 'unknown'
+  request?: {
+    method: string
+    url: string
+    headers?: Record<string, string>
+    cf?: Record<string, unknown>
+  }
+  response?: {
+    status: number
+  }
+  logs: Array<{
+    level: 'log' | 'warn' | 'error' | 'debug' | 'info'
+    message: string[]
+    timestamp: number
+  }>
+  exceptions: Array<{
+    name: string
+    message: string
+    timestamp: number
+  }>
+  executionTimeMs?: number
+}
+
+export interface KVNamespaceInfo {
+  id: string
+  title: string
+  supportsUrlEncoding?: boolean
+}
+
+export interface KVKeyInfo {
+  name: string
+  expiration?: number
+  metadata?: unknown
+}
+
+export interface R2BucketInfo {
+  name: string
+  creationDate?: string
+  location?: string
+}
+
+export interface R2ObjectInfo {
+  key: string
+  size: number
+  uploaded: string
+  etag?: string
+  httpMetadata?: Record<string, string>
+  customMetadata?: Record<string, string>
+}
+
+export interface D1DatabaseInfo {
+  uuid: string
+  name: string
+  version?: string
+  numTables?: number
+  fileSize?: number
+  createdAt?: string
+}
+
+export interface D1TableInfo {
+  name: string
+  schema?: string
+  rowCount?: number
+}
+
+export interface D1QueryResult {
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  durationMs?: number
+  changes?: number
+  error?: string
+}
+
+export interface ExplorerTrace {
+  id: string
+  timestamp: string
+  source: 'wrangler' | 'worker' | 'tunnel' | 'nginx' | 'custom'
+  scriptName?: string
+  method: string
+  url: string
+  status?: number
+  durationMs?: number
+  clientIp?: string
+  userAgent?: string
+  headers?: Record<string, string>
+  logs?: Array<{ level: string; message: string; timestamp: string }>
+  exceptions?: Array<{ message: string; stack?: string }>
+  hops?: Array<{ name: string; status?: string; durationMs?: number }>
+}
+
+export interface NginxServerBlock {
+  serverName: string
+  listen: string[]
+  locations: Array<{
+    path: string
+    proxyPass?: string
+    root?: string
+    alias?: string
+    returns?: string
+  }>
+  sourceFile: string
+  line: number
+}
+
+export interface NginxUpstream {
+  name: string
+  servers: string[]
+  sourceFile: string
+}
+

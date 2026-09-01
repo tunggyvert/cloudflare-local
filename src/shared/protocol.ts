@@ -1,4 +1,24 @@
-import type { Orphan, Plan, ApplyResult, Resource, Service, QuickTunnel } from './model'
+import type {
+  Orphan,
+  Plan,
+  ApplyResult,
+  Resource,
+  Service,
+  QuickTunnel,
+  WorkerSummary,
+  WorkerBinding,
+  WorkerTailEvent,
+  KVNamespaceInfo,
+  KVKeyInfo,
+  R2BucketInfo,
+  R2ObjectInfo,
+  D1DatabaseInfo,
+  D1TableInfo,
+  D1QueryResult,
+  ExplorerTrace,
+  NginxServerBlock,
+  NginxUpstream,
+} from './model'
 
 export interface CoreRequests {
   'health': { req: void; res: { ok: true; version: string } }
@@ -67,6 +87,141 @@ export interface CoreRequests {
     req: { changeIds: string[] }
     res: { results: ApplyResult[] }
   }
+
+  /* ---- v0.3: Workers & Tail ----------------------------------------- */
+
+  /** List deployed Worker scripts. */
+  'workers.list': {
+    req: void
+    res: { workers: WorkerSummary[] }
+  }
+  /** Get details and script bindings of a single Worker. */
+  'workers.get': {
+    req: { scriptName: string }
+    res: { worker: WorkerSummary; content?: string }
+  }
+  /** Deploy or update a Worker script. */
+  'workers.deploy': {
+    req: {
+      scriptName: string
+      code: string
+      compatibilityDate?: string
+      bindings?: WorkerBinding[]
+    }
+    res: { ok: boolean; scriptName: string; modifiedOn?: string }
+  }
+  /** Start a real-time log tail session on a Worker. */
+  'worker.tail.start': {
+    req: { scriptName: string; filter?: { status?: string; search?: string } }
+    res: { ok: boolean; tailId: string; url?: string }
+  }
+  /** Stop an active Worker log tail session. */
+  'worker.tail.stop': {
+    req: { scriptName: string; tailId?: string }
+    res: { stopped: boolean }
+  }
+
+  /* ---- v0.3: Storage & Bindings (Read-only) --------------------------- */
+
+  /** List KV namespaces in the account. */
+  'kv.namespaces.list': {
+    req: void
+    res: { namespaces: KVNamespaceInfo[] }
+  }
+  /** List keys in a KV namespace. */
+  'kv.keys.list': {
+    req: { namespaceId: string; prefix?: string; cursor?: string; limit?: number }
+    res: { keys: KVKeyInfo[]; cursor?: string }
+  }
+  /** Get a KV value and its metadata (Read-only). */
+  'kv.value.get': {
+    req: { namespaceId: string; key: string }
+    res: { value: string | null; isJson?: boolean; metadata?: unknown }
+  }
+
+  /** List R2 buckets in the account. */
+  'r2.buckets.list': {
+    req: void
+    res: { buckets: R2BucketInfo[] }
+  }
+  /** List objects in an R2 bucket (Read-only). */
+  'r2.objects.list': {
+    req: { bucketName: string; prefix?: string; cursor?: string; delimiter?: string; limit?: number }
+    res: { objects: R2ObjectInfo[]; delimitedPrefixes?: string[]; cursor?: string }
+  }
+
+  /** List D1 databases in the account. */
+  'd1.databases.list': {
+    req: void
+    res: { databases: D1DatabaseInfo[] }
+  }
+  /** List tables and schema in a D1 database. */
+  'd1.tables.list': {
+    req: { databaseId: string }
+    res: { tables: D1TableInfo[] }
+  }
+  /** Execute a read-only query (SELECT/PRAGMA only) against a D1 database. */
+  'd1.query.select': {
+    req: { databaseId: string; sql: string; params?: unknown[] }
+    res: D1QueryResult
+  }
+
+  /* ---- v0.3: Local Explorer & Wrangler Dev --------------------------- */
+
+  /** Check status of Local Explorer trace collector. */
+  'explorer.status': {
+    req: void
+    res: { running: boolean; port: number; traceCount: number; wranglerDevRunning: boolean; wranglerProject?: string }
+  }
+  /** List captured local traces. */
+  'explorer.traces.list': {
+    req: { limit?: number; scriptName?: string }
+    res: { traces: ExplorerTrace[] }
+  }
+  /** Clear captured traces. */
+  'explorer.traces.clear': {
+    req: void
+    res: { ok: boolean }
+  }
+  /** Start/stop local Explorer HTTP receiver. */
+  'explorer.server.toggle': {
+    req: { enabled: boolean; port?: number }
+    res: { running: boolean; port: number }
+  }
+  /** Start a supervised `wrangler dev` process in a directory. */
+  'explorer.wrangler.start': {
+    req: { projectPath: string; port?: number; inspectorPort?: number }
+    res: { ok: boolean; pid?: number; port?: number; inspectorPort?: number }
+  }
+  /** Stop the running `wrangler dev` process. */
+  'explorer.wrangler.stop': {
+    req: void
+    res: { stopped: boolean }
+  }
+
+  /* ---- v0.3: Nginx Adapter ------------------------------------------- */
+
+  /** Get Nginx adapter status, detected config paths, and watched files. */
+  'nginx.status': {
+    req: void
+    res: {
+      available: boolean
+      configPath?: string
+      watchedFiles: string[]
+      serversCount: number
+      error?: string
+    }
+  }
+  /** Set a custom Nginx configuration file path. */
+  'nginx.config.setPath': {
+    req: { configPath: string }
+    res: { ok: boolean; configPath: string; serversCount: number; error?: string }
+  }
+  /** List parsed Nginx server blocks and upstreams. */
+  'nginx.servers.list': {
+    req: void
+    res: { servers: NginxServerBlock[]; upstreams: NginxUpstream[] }
+  }
 }
 
 export type CoreMethod = keyof CoreRequests
@@ -88,6 +243,12 @@ export interface CoreEvents {
     image?: string
     at: string
   }
+  /** Real-time Worker tail log event. */
+  'workerTail': { scriptName: string; event: WorkerTailEvent }
+  /** Real-time local explorer trace event. */
+  'explorerTrace': { trace: ExplorerTrace }
+  /** Nginx configuration file changed or reloaded. */
+  'nginx': { event: 'change' | 'error' | 'reload'; path?: string; detail?: string }
 }
 
 

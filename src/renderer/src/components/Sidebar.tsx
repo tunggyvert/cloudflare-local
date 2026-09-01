@@ -4,9 +4,13 @@ import {
   IconContainer,
   IconDashboard,
   IconDns,
+  IconExplorer,
   IconLogs,
   IconOrphan,
+  IconServer,
+  IconStorage,
   IconTunnel,
+  IconWorker,
 } from '../icons'
 import type { View } from '../views/types'
 
@@ -16,6 +20,10 @@ const NAV: { id: View; label: string; icon: typeof IconDashboard }[] = [
   { id: 'containers', label: 'Containers', icon: IconContainer },
   { id: 'tunnels', label: 'Tunnels', icon: IconTunnel },
   { id: 'dns', label: 'DNS Records', icon: IconDns },
+  { id: 'workers', label: 'Workers', icon: IconWorker },
+  { id: 'bindings', label: 'Storage', icon: IconStorage },
+  { id: 'explorer', label: 'Explorer', icon: IconExplorer },
+  { id: 'nginx', label: 'Nginx', icon: IconServer },
   { id: 'orphans', label: 'Orphans', icon: IconOrphan },
   { id: 'logs', label: 'Logs', icon: IconLogs },
 ]

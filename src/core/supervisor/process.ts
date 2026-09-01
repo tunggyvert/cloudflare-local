@@ -8,6 +8,7 @@ export interface SupervisedOptions {
   id: string
   command: string
   args: string[]
+  cwd?: string
   env?: Record<string, string>
   /** Restart on non-zero exit, with backoff. Off for one-shot commands. */
   restart?: boolean
@@ -45,6 +46,7 @@ export class SupervisedProcess extends EventEmitter {
     this.setState('starting')
 
     const child = spawn(this.opts.command, this.opts.args, {
+      cwd: this.opts.cwd,
       env: { ...process.env, ...this.opts.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

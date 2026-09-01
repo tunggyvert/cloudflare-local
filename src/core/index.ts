@@ -11,27 +11,37 @@
  */
 import { DockerProvider } from './providers/docker'
 import { CloudflareProvider } from './providers/cloudflare'
+import { NginxProvider } from './providers/nginx'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
 import { QuickTunnelManager } from './quick-tunnel'
 import { LocalCacheStore } from './cache/store'
+import { WorkerTailManager } from './workers/tail'
+import { LocalExplorerManager } from './explorer/manager'
 import { readToken, saveToken, deleteToken } from './secrets'
 import type { Provider } from './providers/types'
 import type { Resource, Service } from '../shared/model'
 import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/protocol'
 
-const VERSION = '0.0.1'
+const VERSION = '0.3.0'
 
 const supervisor = new Supervisor()
 const quickTunnels = new QuickTunnelManager(supervisor)
 const docker = new DockerProvider()
+const nginx = new NginxProvider()
 const cache = new LocalCacheStore()
 let cloudflare: CloudflareProvider | null = null
 let accountMeta: { accountId: string; label: string } | null = null
 
+const workerTails = new WorkerTailManager(
+  () => cloudflare?.getClient() ?? null,
+  () => cloudflare?.getAccountId() ?? null
+)
+const explorer = new LocalExplorerManager(supervisor)
+
 /** Build the active provider list dynamically based on what's configured. */
 function activeProviders(): Provider[] {
-  return cloudflare ? [docker, cloudflare] : [docker]
+  return cloudflare ? [docker, nginx, cloudflare] : [docker, nginx]
 }
 
 /**
@@ -74,6 +84,21 @@ docker.on('container', (e) => {
   // Automatically refresh discovery in background when container lifecycle changes
   void runDiscovery()
 })
+nginx.on('change', (e) => {
+  emit('nginx', e)
+  void runDiscovery()
+})
+nginx.on('error', (e) => emit('nginx', e))
+workerTails.on('tail', (e) => emit('workerTail', e))
+workerTails.on('error', (e) => {
+  emit('log', {
+    source: `worker:${e.scriptName}`,
+    stream: 'stderr',
+    line: e.error,
+    at: new Date().toISOString(),
+  })
+})
+explorer.on('trace', (trace) => emit('explorerTrace', { trace }))
 
 /** Core discovery runner */
 async function runDiscovery(): Promise<Resource[]> {
@@ -271,6 +296,178 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return result
     }
 
+    /* ---- v0.3: Workers & Tail ----------------------------------------- */
+
+    case 'workers.list': {
+      const workers = cloudflare ? await cloudflare.listWorkers() : []
+      return { workers }
+    }
+
+    case 'workers.get': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { scriptName } = req.params as { scriptName: string }
+      return await cloudflare.getWorker(scriptName)
+    }
+
+    case 'workers.deploy': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const params = req.params as {
+        scriptName: string
+        code: string
+        compatibilityDate?: string
+        bindings?: import('../shared/model').WorkerBinding[]
+      }
+      const result = await cloudflare.deployWorker(params)
+      void runDiscovery()
+      return result
+    }
+
+    case 'worker.tail.start': {
+      const { scriptName, filter } = req.params as {
+        scriptName: string
+        filter?: { status?: string; search?: string }
+      }
+      return await workerTails.startTail(scriptName, filter)
+    }
+
+    case 'worker.tail.stop': {
+      const { scriptName } = req.params as { scriptName: string; tailId?: string }
+      const stopped = await workerTails.stopTail(scriptName)
+      return { stopped }
+    }
+
+    /* ---- v0.3: Storage & Bindings (Read-only) ------------------------- */
+
+    case 'kv.namespaces.list': {
+      const namespaces = cloudflare ? await cloudflare.listKvNamespaces() : []
+      return { namespaces }
+    }
+
+    case 'kv.keys.list': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { namespaceId, prefix, cursor, limit } = req.params as {
+        namespaceId: string
+        prefix?: string
+        cursor?: string
+        limit?: number
+      }
+      return await cloudflare.listKvKeys(namespaceId, { prefix, cursor, limit })
+    }
+
+    case 'kv.value.get': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { namespaceId, key } = req.params as { namespaceId: string; key: string }
+      return await cloudflare.getKvValue(namespaceId, key)
+    }
+
+    case 'r2.buckets.list': {
+      const buckets = cloudflare ? await cloudflare.listR2Buckets() : []
+      return { buckets }
+    }
+
+    case 'r2.objects.list': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { bucketName, prefix, cursor, delimiter, limit } = req.params as {
+        bucketName: string
+        prefix?: string
+        cursor?: string
+        delimiter?: string
+        limit?: number
+      }
+      return await cloudflare.listR2Objects(bucketName, { prefix, cursor, delimiter, limit })
+    }
+
+    case 'd1.databases.list': {
+      const databases = cloudflare ? await cloudflare.listD1Databases() : []
+      return { databases }
+    }
+
+    case 'd1.tables.list': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { databaseId } = req.params as { databaseId: string }
+      const tables = await cloudflare.getD1Tables(databaseId)
+      return { tables }
+    }
+
+    case 'd1.query.select': {
+      if (!cloudflare) throw new Error('No Cloudflare account configured')
+      const { databaseId, sql, params } = req.params as {
+        databaseId: string
+        sql: string
+        params?: unknown[]
+      }
+      return await cloudflare.queryD1ReadOnly(databaseId, sql, params)
+    }
+
+    /* ---- v0.3: Local Explorer & Wrangler Dev ------------------------- */
+
+    case 'explorer.status':
+      return explorer.getStatus()
+
+    case 'explorer.traces.list': {
+      const { limit, scriptName } = (req.params as { limit?: number; scriptName?: string } | undefined) ?? {}
+      return { traces: explorer.getTraces(limit, scriptName) }
+    }
+
+    case 'explorer.traces.clear':
+      explorer.clearTraces()
+      return { ok: true }
+
+    case 'explorer.server.toggle': {
+      const { enabled, port } = req.params as { enabled: boolean; port?: number }
+      if (enabled) {
+        return await explorer.startServer(port)
+      }
+      return await explorer.stopServer()
+    }
+
+    case 'explorer.wrangler.start': {
+      const { projectPath, port, inspectorPort } = req.params as {
+        projectPath: string
+        port?: number
+        inspectorPort?: number
+      }
+      return await explorer.startWrangler(projectPath, port, inspectorPort)
+    }
+
+    case 'explorer.wrangler.stop': {
+      const stopped = await explorer.stopWrangler()
+      return { stopped }
+    }
+
+    /* ---- v0.3: Nginx Adapter ----------------------------------------- */
+
+    case 'nginx.status': {
+      const avail = await nginx.available()
+      return {
+        available: avail.ok,
+        configPath: nginx.getConfigPath(),
+        watchedFiles: nginx.getWatchedFiles(),
+        serversCount: nginx.getServers().length,
+        error: avail.detail,
+      }
+    }
+
+    case 'nginx.config.setPath': {
+      const { configPath } = req.params as { configPath: string }
+      const setRes = nginx.setConfigPath(configPath)
+      if (setRes.ok) {
+        void runDiscovery()
+      }
+      return {
+        ok: setRes.ok,
+        configPath: setRes.path,
+        serversCount: nginx.getServers().length,
+        error: setRes.error,
+      }
+    }
+
+    case 'nginx.servers.list':
+      return {
+        servers: nginx.getServers(),
+        upstreams: nginx.getUpstreams(),
+      }
+
     default:
       throw new Error(`unknown method: ${String(req.method)}`)
   }
@@ -305,8 +502,7 @@ function assemble(resources: Resource[]): Service[] {
     }
   }
 
-  // Attach origins by address match. Crude for v0.1 and knowingly so — proper
-  // origin↔route correlation arrives with path tracing in v0.4.
+  // Attach origins by address match.
   const origins = resources.flatMap((r) => r.origins ?? [])
   for (const svc of byHostname.values()) {
     svc.origins = origins.filter((o) =>
@@ -339,6 +535,9 @@ process.on('message', async (msg: CoreMessage) => {
 /** Nothing this process started may outlive it. */
 async function shutdown(): Promise<void> {
   docker.stopEventListener()
+  nginx.stopWatcher()
+  await workerTails.stopAll()
+  await explorer.stopAll()
   cache.close()
   await supervisor.stopAll()
   process.exit(0)
@@ -348,8 +547,14 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 process.on('disconnect', shutdown)
 
-// Restore saved account from OS keychain, start Docker event listener, then announce readiness.
+// Restore saved account from OS keychain, start Docker event listener and Nginx watcher, then announce readiness.
 restoreAccount()
 void docker.startEventListener()
+nginx.startWatcher()
+
+// Auto-start Local Explorer trace receiver server
+void explorer.startServer().catch(() => {
+  /* ignore port conflicts */
+})
 
 send({ kind: 'event', event: 'process', payload: { source: 'core', state: 'running' } } as RpcEvent)

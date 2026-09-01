@@ -180,3 +180,77 @@ export function IconStop(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconPlay(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <polygon points="4,3 13,8 4,13" />
+    </Icon>
+  )
+}
+
+export function IconWorker(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <polygon points="8,1.5 14,5 14,11 8,14.5 2,11 2,5" />
+      <path d="M8 1.5v13M2 5l6 3.5 6-3.5" />
+    </Icon>
+  )
+}
+
+export function IconStorage(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <ellipse cx="8" cy="4" rx="6" ry="2" />
+      <path d="M2 4v4c0 1.1 2.7 2 6 2s6-.9 6-2V4" />
+      <path d="M2 8v4c0 1.1 2.7 2 6 2s6-.9 6-2V8" />
+    </Icon>
+  )
+}
+
+export function IconExplorer(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <polyline points="1.5,8 4.5,8 6.5,3.5 9.5,12.5 11.5,8 14.5,8" strokeLinecap="round" strokeLinejoin="round" />
+    </Icon>
+  )
+}
+
+export function IconServer(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="2" y="2.5" width="12" height="4.5" rx="0.5" />
+      <rect x="2" y="9" width="12" height="4.5" rx="0.5" />
+      <circle cx="4.5" cy="4.75" r="0.75" />
+      <circle cx="4.5" cy="11.25" r="0.75" />
+      <path d="M8 4.75h4M8 11.25h4" strokeLinecap="round" />
+    </Icon>
+  )
+}
+
+export function IconSearch(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="6.5" cy="6.5" r="4.5" />
+      <path d="M10 10l4.5 4.5" strokeLinecap="round" />
+    </Icon>
+  )
+}
+
+export function IconCode(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <polyline points="5,4 1.5,8 5,12" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points="11,4 14.5,8 11,12" strokeLinecap="round" strokeLinejoin="round" />
+      <line x1="9.5" y1="3" x2="6.5" y2="13" strokeLinecap="round" />
+    </Icon>
+  )
+}
+
+export function IconFilter(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <polygon points="2,3 14,3 9.5,8.5 9.5,13 6.5,11.5 6.5,8.5" />
+    </Icon>
+  )
+}
+
