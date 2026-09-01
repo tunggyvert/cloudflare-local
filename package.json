@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-local",
-  "version": "0.0.1",
+  "version": "0.3.0",
   "description": "A local-first manager for Cloudflare Tunnels and their origins",
   "private": true,
   "license": "MIT",
@@ -15,7 +15,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "node scripts/check-core-isolation.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node scripts/test-docker-labels.mjs && node scripts/test-cache-store.mjs",
+    "test": "node scripts/test-docker-labels.mjs && node scripts/test-cache-store.mjs && node scripts/test-nginx-parser.mjs && node scripts/test-nginx-provider.mjs && node scripts/test-d1-readonly.mjs && node scripts/test-local-explorer.mjs && node scripts/test-workers-tail.mjs",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder",
     "check:core": "node scripts/check-core-isolation.mjs"
