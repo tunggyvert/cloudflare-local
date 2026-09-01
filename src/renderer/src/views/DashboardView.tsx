@@ -1,6 +1,20 @@
 import type { Orphan, QuickTunnel, Resource } from '../../../shared/model'
 import { ErrorBanner } from '../components/ErrorBanner'
-import { IconBolt, IconCheck, IconContainer, IconCopy, IconDns, IconLink, IconLogs, IconOrphan, IconTunnel } from '../icons'
+import {
+  IconBolt,
+  IconCheck,
+  IconContainer,
+  IconCopy,
+  IconDns,
+  IconExplorer,
+  IconLink,
+  IconLogs,
+  IconOrphan,
+  IconServer,
+  IconStorage,
+  IconTunnel,
+  IconWorker,
+} from '../icons'
 import { PageHeader } from '../components/PageHeader'
 import { StatusDot, StatusPill } from '../components/Status'
 import { EmptyRow, TBody, THead, Table, Td, Th, Tr } from '../components/Table'
@@ -12,9 +26,12 @@ export function DashboardView({
   containers,
   tunnels,
   dnsRecords,
+  workers = [],
+  nginxServers = [],
   orphans,
   quickTunnels,
   logs,
+  tracesCount = 0,
   busy,
   error,
   configured,
@@ -25,9 +42,12 @@ export function DashboardView({
   containers: Resource[]
   tunnels: Resource[]
   dnsRecords: Resource[]
+  workers?: Resource[]
+  nginxServers?: Resource[]
   orphans: Orphan[]
   quickTunnels: QuickTunnel[]
   logs: LogEntry[]
+  tracesCount?: number
   busy: boolean
   error: string | null
   configured: boolean
@@ -57,6 +77,10 @@ export function DashboardView({
     { view: 'containers', icon: IconContainer, label: 'Containers', total: containers.length, detail: `${running} running` },
     { view: 'tunnels', icon: IconTunnel, label: 'Tunnels', total: tunnels.length, detail: `${tunnels.length} discovered` },
     { view: 'dns', icon: IconDns, label: 'DNS Records', total: dnsRecords.length, detail: `${dnsRecords.length} tunnel CNAMEs` },
+    { view: 'workers', icon: IconWorker, label: 'Workers', total: workers.length, detail: `${workers.length} scripts deployed` },
+    { view: 'bindings', icon: IconStorage, label: 'Storage', total: 3, detail: 'KV, R2, D1 browser' },
+    { view: 'explorer', icon: IconExplorer, label: 'Explorer', total: tracesCount, detail: 'wrangler dev traces' },
+    { view: 'nginx', icon: IconServer, label: 'Nginx', total: nginxServers.length, detail: `${nginxServers.length} server blocks` },
     { view: 'orphans', icon: IconOrphan, label: 'Orphans', total: orphans.length, detail: `${certain} certain, ${likely} likely` },
     { view: 'logs', icon: IconLogs, label: 'Logs', total: logs.length, detail: 'live stream' },
   ]

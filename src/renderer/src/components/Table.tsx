@@ -28,11 +28,21 @@ export function TBody({ children }: { children: ReactNode }) {
   return <tbody className="[&>tr:last-child>td]:border-b-0">{children}</tbody>
 }
 
-export function Tr({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+export function Tr({
+  children,
+  onClick,
+  className = '',
+}: {
+  children: ReactNode
+  onClick?: () => void
+  className?: string
+}) {
   return (
     <tr
       onClick={onClick}
-      className={`border-b border-border ${onClick ? 'cursor-pointer hover:bg-surface-hover' : 'hover:bg-surface-hover'}`}
+      className={`border-b border-border ${
+        onClick ? 'cursor-pointer hover:bg-surface-hover' : 'hover:bg-surface-hover'
+      } ${className}`}
     >
       {children}
     </tr>
