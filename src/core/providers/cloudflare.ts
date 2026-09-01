@@ -1,6 +1,21 @@
 import Cloudflare from 'cloudflare'
 import type { Provider } from './types'
-import type { ApplyResult, Change, IaCFragment, Resource, Route } from '../../shared/model'
+import type {
+  ApplyResult,
+  Change,
+  D1DatabaseInfo,
+  D1QueryResult,
+  D1TableInfo,
+  IaCFragment,
+  KVKeyInfo,
+  KVNamespaceInfo,
+  R2BucketInfo,
+  R2ObjectInfo,
+  Resource,
+  Route,
+  WorkerBinding,
+  WorkerSummary,
+} from '../../shared/model'
 
 export interface CloudflareConfig {
   apiToken: string
@@ -28,6 +43,14 @@ export class CloudflareProvider implements Provider {
     this.client = new Cloudflare({ apiToken: cfg.apiToken })
   }
 
+  getClient(): Cloudflare {
+    return this.client
+  }
+
+  getAccountId(): string {
+    return this.cfg.accountId
+  }
+
   async available() {
     try {
       // Use token/verify instead of accounts.get — the latter requires the
@@ -53,11 +76,12 @@ export class CloudflareProvider implements Provider {
   }
 
   async discover(): Promise<Resource[]> {
-    const [tunnels, dns] = await Promise.all([
+    const [tunnels, dns, workers] = await Promise.all([
       this.discoverTunnels(),
       this.discoverDns(),
+      this.discoverWorkers().catch(() => []),
     ])
-    return [...tunnels, ...dns]
+    return [...tunnels, ...dns, ...workers]
   }
 
   private async discoverTunnels(): Promise<Resource[]> {
@@ -169,6 +193,435 @@ export class CloudflareProvider implements Provider {
     const ids: string[] = []
     for await (const z of this.client.zones.list()) if (z.id) ids.push(z.id)
     return ids
+  }
+
+  /* ---- v0.3: Workers & Bindings ------------------------------------ */
+
+  private async discoverWorkers(): Promise<Resource[]> {
+    const out: Resource[] = []
+    const workers = await this.listWorkers()
+
+    for (const w of workers) {
+      const routes: Route[] = []
+      for (const r of w.routes ?? []) {
+        routes.push({
+          id: `cloudflare:workerroute:${w.name}:${r}`,
+          provider: 'cloudflare',
+          hostname: r.replace(/\/\*?$/, '').replace(/^https?:\/\//, ''),
+          kind: 'worker-route',
+        })
+      }
+      for (const d of w.domains ?? []) {
+        routes.push({
+          id: `cloudflare:workerdomain:${w.name}:${d}`,
+          provider: 'cloudflare',
+          hostname: d,
+          kind: 'worker-domain',
+        })
+      }
+
+      out.push({
+        id: `cloudflare:worker:${w.name}`,
+        provider: 'cloudflare',
+        type: 'worker',
+        name: w.name,
+        routes,
+        meta: {
+          scriptName: w.name,
+          modifiedOn: w.modifiedOn ?? '',
+          createdOn: w.createdOn ?? '',
+          bindingsCount: String(w.bindings?.length ?? 0),
+          compatibilityDate: w.compatibilityDate ?? '',
+        },
+      })
+    }
+
+    return out
+  }
+
+  async listWorkers(): Promise<WorkerSummary[]> {
+    const out: WorkerSummary[] = []
+    try {
+      for await (const s of this.client.workers.scripts.list({
+        account_id: this.cfg.accountId,
+      })) {
+        const name = s.id ?? ''
+        if (!name) continue
+
+        const routes: string[] = []
+        if (Array.isArray(s.routes)) {
+          for (const r of s.routes) {
+            if (typeof r === 'string') routes.push(r)
+            else if (r && typeof r === 'object' && 'pattern' in r) {
+              routes.push(String((r as { pattern: string }).pattern))
+            }
+          }
+        }
+
+        let bindings: WorkerBinding[] = []
+        let compDate: string | undefined = s.compatibility_date
+        try {
+          const settings = await this.client.workers.scripts.scriptAndVersionSettings.get(name, {
+            account_id: this.cfg.accountId,
+          })
+          if (settings.compatibility_date) compDate = settings.compatibility_date
+          if (Array.isArray(settings.bindings)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            bindings = settings.bindings.map((b: any) => ({
+              type: b.type || 'unknown',
+              name: b.name || '',
+              targetId: b.namespace_id || b.bucket_name || b.database_id || b.service || undefined,
+              details: b,
+            }))
+          }
+        } catch {
+          /* ignore settings error on individual scripts */
+        }
+
+        out.push({
+          id: name,
+          name,
+          createdOn: s.created_on,
+          modifiedOn: s.modified_on,
+          etag: s.etag,
+          routes,
+          bindings,
+          compatibilityDate: compDate,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          logpush: (s as any).logpush ?? false,
+        })
+      }
+    } catch {
+      return []
+    }
+    return out
+  }
+
+  async getWorker(scriptName: string): Promise<{ worker: WorkerSummary; content?: string }> {
+    let content: string | undefined
+    try {
+      const resp = await this.client.workers.scripts.content.get(scriptName, {
+        account_id: this.cfg.accountId,
+      })
+      content = await resp.text()
+    } catch {
+      /* content may not be readable */
+    }
+
+    let summary: WorkerSummary = {
+      id: scriptName,
+      name: scriptName,
+    }
+
+    try {
+      const s = await this.client.workers.scripts.get(scriptName, {
+        account_id: this.cfg.accountId,
+      })
+      const settings = await this.client.workers.scripts.scriptAndVersionSettings.get(scriptName, {
+        account_id: this.cfg.accountId,
+      }).catch(() => null)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bindings: WorkerBinding[] = Array.isArray(settings?.bindings)
+        ? (settings.bindings as unknown as Array<Record<string, unknown>>).map((b) => ({
+            type: String(b.type || 'unknown'),
+            name: String(b.name || ''),
+            targetId: String(b.namespace_id || b.bucket_name || b.database_id || b.service || '') || undefined,
+            details: b,
+          }))
+        : []
+
+      summary = {
+        id: scriptName,
+        name: scriptName,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        createdOn: (s as any).created_on,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        modifiedOn: (s as any).modified_on,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        etag: (s as any).etag,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        compatibilityDate: settings?.compatibility_date || (s as any).compatibility_date,
+        bindings,
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return { worker: summary, content }
+  }
+
+  async deployWorker(params: {
+    scriptName: string
+    code: string
+    compatibilityDate?: string
+    bindings?: WorkerBinding[]
+  }): Promise<{ ok: boolean; scriptName: string; modifiedOn?: string }> {
+    const { scriptName, code, compatibilityDate, bindings } = params
+    if (!scriptName) throw new Error('scriptName is required')
+    if (!code) throw new Error('code is required')
+
+    const mainModuleName = 'index.js'
+    const metadataBindings = (bindings ?? []).map((b) => {
+      if (b.type === 'kv_namespace' && b.targetId) {
+        return { type: 'kv_namespace', name: b.name, namespace_id: b.targetId }
+      }
+      if (b.type === 'r2_bucket' && b.targetId) {
+        return { type: 'r2_bucket', name: b.name, bucket_name: b.targetId }
+      }
+      if (b.type === 'd1' && b.targetId) {
+        return { type: 'd1', name: b.name, database_id: b.targetId }
+      }
+      if (b.type === 'plain_text' && b.targetId) {
+        return { type: 'plain_text', name: b.name, text: b.targetId }
+      }
+      if (b.type === 'secret_text' && b.targetId) {
+        return { type: 'secret_text', name: b.name, text: b.targetId }
+      }
+      return b.details || { type: b.type, name: b.name }
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metadata: any = {
+      main_module: mainModuleName,
+      compatibility_date: compatibilityDate || '2024-09-23',
+    }
+    if (metadataBindings.length > 0) {
+      metadata.bindings = metadataBindings
+    }
+
+    const file = new File([code], mainModuleName, { type: 'application/javascript+module' })
+    const res = await this.client.workers.scripts.update(scriptName, {
+      account_id: this.cfg.accountId,
+      metadata,
+      files: [file],
+    })
+
+    return {
+      ok: true,
+      scriptName,
+      modifiedOn: res.modified_on,
+    }
+  }
+
+  /* ---- v0.3: KV Browser (Read-only) -------------------------------- */
+
+  async listKvNamespaces(): Promise<KVNamespaceInfo[]> {
+    const out: KVNamespaceInfo[] = []
+    for await (const ns of this.client.kv.namespaces.list({
+      account_id: this.cfg.accountId,
+    })) {
+      if (ns.id && ns.title) {
+        out.push({
+          id: ns.id,
+          title: ns.title,
+          supportsUrlEncoding: ns.supports_url_encoding,
+        })
+      }
+    }
+    return out
+  }
+
+  async listKvKeys(
+    namespaceId: string,
+    params?: { prefix?: string; cursor?: string; limit?: number }
+  ): Promise<{ keys: KVKeyInfo[]; cursor?: string }> {
+    const res = await this.client.kv.namespaces.keys.list(namespaceId, {
+      account_id: this.cfg.accountId,
+      prefix: params?.prefix,
+      cursor: params?.cursor,
+      limit: params?.limit || 100,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const keys: KVKeyInfo[] = (res.result || []).map((k: any) => ({
+      name: k.name,
+      expiration: k.expiration,
+      metadata: k.metadata,
+    }))
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cursor = (res as any).result_info?.cursor || undefined
+    return { keys, cursor }
+  }
+
+  async getKvValue(
+    namespaceId: string,
+    key: string
+  ): Promise<{ value: string | null; isJson?: boolean; metadata?: unknown }> {
+    try {
+      const resp = await this.client.kv.namespaces.values.get(key, {
+        account_id: this.cfg.accountId,
+        namespace_id: namespaceId,
+      })
+      const text = await resp.text()
+      let isJson = false
+      try {
+        JSON.parse(text)
+        isJson = true
+      } catch {
+        isJson = false
+      }
+      return { value: text, isJson }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      if (err?.status === 404) return { value: null }
+      throw err
+    }
+  }
+
+  /* ---- v0.3: R2 Browser (Read-only) -------------------------------- */
+
+  async listR2Buckets(): Promise<R2BucketInfo[]> {
+    const out: R2BucketInfo[] = []
+    const res = await this.client.r2.buckets.list({
+      account_id: this.cfg.accountId,
+    })
+    for (const b of res.buckets || []) {
+      if (b.name) {
+        out.push({
+          name: b.name,
+          creationDate: b.creation_date,
+          location: b.location,
+        })
+      }
+    }
+    return out
+  }
+
+  async listR2Objects(
+    bucketName: string,
+    params?: { prefix?: string; cursor?: string; delimiter?: string; limit?: number }
+  ): Promise<{ objects: R2ObjectInfo[]; delimitedPrefixes?: string[]; cursor?: string }> {
+    const objects: R2ObjectInfo[] = []
+    let count = 0
+    const max = params?.limit || 100
+
+    for await (const o of this.client.r2.buckets.objects.list(bucketName, {
+      account_id: this.cfg.accountId,
+      prefix: params?.prefix,
+      cursor: params?.cursor,
+      delimiter: params?.delimiter,
+      per_page: max,
+    })) {
+      if (o.key) {
+        objects.push({
+          key: o.key,
+          size: o.size || 0,
+          uploaded: o.last_modified || '',
+          etag: o.etag,
+          httpMetadata: o.http_metadata as unknown as Record<string, string>,
+          customMetadata: o.custom_metadata,
+        })
+      }
+      count++
+      if (count >= max) break
+    }
+
+    return { objects }
+  }
+
+  /* ---- v0.3: D1 Browser (Read-only) -------------------------------- */
+
+  async listD1Databases(): Promise<D1DatabaseInfo[]> {
+    const out: D1DatabaseInfo[] = []
+    for await (const db of this.client.d1.database.list({
+      account_id: this.cfg.accountId,
+    })) {
+      if (db.uuid && db.name) {
+        out.push({
+          uuid: db.uuid,
+          name: db.name,
+          version: db.version,
+          createdAt: db.created_at,
+        })
+      }
+    }
+    return out
+  }
+
+  async getD1Tables(databaseId: string): Promise<D1TableInfo[]> {
+    try {
+      const res = await this.queryD1ReadOnly(
+        databaseId,
+        "SELECT name, sql FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name;"
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return res.rows.map((r: any) => ({
+        name: String(r.name || ''),
+        schema: String(r.sql || ''),
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  async queryD1ReadOnly(databaseId: string, sql: string, params?: unknown[]): Promise<D1QueryResult> {
+    const validation = this.validateReadOnlySql(sql)
+    if (!validation.ok) {
+      return {
+        columns: [],
+        rows: [],
+        error: validation.reason || 'Query not permitted in read-only browser',
+      }
+    }
+
+    try {
+      const stringParams = params ? params.map((p) => String(p)) : undefined
+      const res = await this.client.d1.database.query(databaseId, {
+        account_id: this.cfg.accountId,
+        sql,
+        params: stringParams,
+      })
+
+      const first = Array.isArray(res) ? res[0] : res
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const results = (first as any)?.results || []
+      const columns = results.length > 0 ? Object.keys(results[0]) : []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const meta = (first as any)?.meta
+
+      return {
+        columns,
+        rows: results,
+        durationMs: meta?.duration,
+        changes: meta?.changes,
+      }
+    } catch (err) {
+      return {
+        columns: [],
+        rows: [],
+        error: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
+
+  private validateReadOnlySql(sql: string): { ok: boolean; reason?: string } {
+    const clean = sql.trim().replace(/\/\*[\s\S]*?\*\//g, '').replace(/--.*$/gm, '').trim()
+    if (!clean) return { ok: false, reason: 'Empty SQL query' }
+
+    const forbiddenPatterns = [
+      /\b(insert|update|delete|drop|alter|create|replace|truncate|vacuum|attach|detach|reindex)\b/i,
+      /\b(grant|revoke|commit|rollback|savepoint|release)\b/i,
+    ]
+
+    for (const pattern of forbiddenPatterns) {
+      if (pattern.test(clean)) {
+        return {
+          ok: false,
+          reason: 'Mutation/DDL query rejected. D1 browser is strictly read-only (SELECT / PRAGMA only).',
+        }
+      }
+    }
+
+    if (!/^(select|pragma|explain|with)\b/i.test(clean)) {
+      return {
+        ok: false,
+        reason: 'Only SELECT, PRAGMA, and EXPLAIN queries are permitted.',
+      }
+    }
+
+    return { ok: true }
   }
 
   /**
