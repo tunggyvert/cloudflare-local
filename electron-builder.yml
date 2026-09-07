@@ -16,3 +16,8 @@ win:
 linux:
   target: [AppImage, deb]
   category: Development
+
+publish:
+  provider: generic
+  url: https://updates.tunggyvert.com/
+

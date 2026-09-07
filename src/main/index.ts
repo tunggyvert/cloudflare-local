@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, dialog } from 'electron'
 import { join } from 'node:path'
+import { autoUpdater } from 'electron-updater'
 import { CoreClient } from './core-client'
 import { IPC_INVOKE, IPC_EVENT, type CoreMethod } from '../shared/protocol'
 
@@ -66,9 +67,104 @@ function createTray(): void {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open cloudflare-local', click: showWindow },
     { type: 'separator' },
+    {
+      label: 'Check for Updates…',
+      click: () => {
+        if (app.isPackaged) {
+          autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+            dialog.showMessageBox({
+              type: 'warning',
+              title: 'Update Check',
+              message: `Could not check for updates: ${err instanceof Error ? err.message : String(err)}`,
+            })
+          })
+        } else {
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'Development Mode',
+            message: 'Auto-update is disabled while running in development mode.',
+          })
+        }
+      },
+    },
+    { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]))
   tray.on('click', showWindow)
+}
+
+function setupAutoUpdater(): void {
+  const feedUrl = process.env.CLOUDFLARE_LOCAL_UPDATE_URL || 'https://updates.tunggyvert.com/'
+  try {
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: feedUrl,
+    })
+  } catch (err) {
+    console.warn('[updater] Failed to set feed URL:', err)
+  }
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    win?.webContents.send(IPC_EVENT, {
+      kind: 'event',
+      event: 'log',
+      payload: {
+        source: 'updater',
+        stream: 'stdout',
+        line: `New version v${info.version} available. Downloading update in background…`,
+        at: new Date().toISOString(),
+      },
+    })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    win?.webContents.send(IPC_EVENT, {
+      kind: 'event',
+      event: 'log',
+      payload: {
+        source: 'updater',
+        stream: 'stdout',
+        line: `Update v${info.version} downloaded and ready to install.`,
+        at: new Date().toISOString(),
+      },
+    })
+
+    if (win) {
+      dialog
+        .showMessageBox(win, {
+          type: 'info',
+          title: 'Update Available',
+          message: `Version ${info.version} is ready to install.`,
+          detail: 'Would you like to restart the application now to apply the update?',
+          buttons: ['Restart and Install', 'Install on Exit'],
+          defaultId: 0,
+          cancelId: 1,
+        })
+        .then(({ response }) => {
+          if (response === 0) {
+            autoUpdater.quitAndInstall()
+          }
+        })
+        .catch(() => {})
+    }
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.warn('[updater] Update check error:', err?.message)
+  })
+
+  // Automatically check for updates 3 seconds after launch
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 3000)
+
+  // Periodically check every 4 hours
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 4 * 60 * 60 * 1000)
 }
 
 app.whenReady().then(() => {
@@ -89,6 +185,10 @@ app.whenReady().then(() => {
   createWindow()
   createTray()
 
+  if (app.isPackaged) {
+    setupAutoUpdater()
+  }
+
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
@@ -103,3 +203,4 @@ app.on('before-quit', async (e) => {
   await core.stop()
   app.quit()
 })
+
