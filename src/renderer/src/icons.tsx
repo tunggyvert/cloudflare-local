@@ -215,6 +215,18 @@ export function IconExplorer(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconPathTrace(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M2 8h1.5m2.4 0h1.6m2.4 0h1.6m2.4 0H14" strokeLinecap="round" />
+      <circle cx="2" cy="8" r="1.25" />
+      <circle cx="6.4" cy="8" r="1.25" />
+      <circle cx="10.8" cy="8" r="1.25" />
+      <circle cx="14" cy="8" r="1.25" />
+    </Icon>
+  )
+}
+
 export function IconServer(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

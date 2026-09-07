@@ -10,6 +10,7 @@ import {
   IconLink,
   IconLogs,
   IconOrphan,
+  IconPathTrace,
   IconServer,
   IconStorage,
   IconTunnel,
@@ -32,6 +33,7 @@ export function DashboardView({
   quickTunnels,
   logs,
   tracesCount = 0,
+  pathTracesCount = 0,
   busy,
   error,
   configured,
@@ -48,6 +50,7 @@ export function DashboardView({
   quickTunnels: QuickTunnel[]
   logs: LogEntry[]
   tracesCount?: number
+  pathTracesCount?: number
   busy: boolean
   error: string | null
   configured: boolean
@@ -73,6 +76,7 @@ export function DashboardView({
   }
 
   const summary: { view: View; icon: typeof IconContainer; label: string; total: number; detail: string }[] = [
+    { view: 'trace', icon: IconPathTrace, label: 'Path Trace', total: pathTracesCount, detail: 'edge → worker → tunnel → nginx → container' },
     { view: 'quick-tunnel', icon: IconBolt, label: 'Quick Tunnel', total: activeQuick.length, detail: activeQuick.length > 0 ? `${activeQuick.length} active (trycloudflare)` : 'expose local port' },
     { view: 'containers', icon: IconContainer, label: 'Containers', total: containers.length, detail: `${running} running` },
     { view: 'tunnels', icon: IconTunnel, label: 'Tunnels', total: tunnels.length, detail: `${tunnels.length} discovered` },

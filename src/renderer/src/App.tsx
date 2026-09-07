@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ExplorerTrace, Orphan, QuickTunnel, Resource, WorkerTailEvent } from '../../shared/model'
+import type { ExplorerTrace, Orphan, PathTrace, QuickTunnel, Resource, WorkerTailEvent } from '../../shared/model'
 import type { RpcEvent } from '../../shared/protocol'
 import { AccountBadge } from './components/AccountBadge'
 import { ExposeContainerModal } from './components/ExposeContainerModal'
@@ -15,6 +15,7 @@ import type { LogEntry } from './views/LogsView'
 import { LogsView } from './views/LogsView'
 import { NginxView } from './views/NginxView'
 import { OrphansView } from './views/OrphansView'
+import { PathTraceView } from './views/PathTraceView'
 import { QuickTunnelView } from './views/QuickTunnelView'
 import { TunnelsView } from './views/TunnelsView'
 import type { View } from './views/types'
@@ -29,6 +30,7 @@ export default function App() {
   const [quickTunnels, setQuickTunnels] = useState<QuickTunnel[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [traces, setTraces] = useState<ExplorerTrace[]>([])
+  const [pathTraces, setPathTraces] = useState<PathTrace[]>([])
   const [tailLogs, setTailLogs] = useState<WorkerTailEvent[]>([])
   const [activeTailScript, setActiveTailScript] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -66,6 +68,19 @@ export default function App() {
         } else if (ev.event === 'explorerTrace') {
           const { trace } = ev.payload as { trace: ExplorerTrace }
           setTraces((prev) => [trace, ...prev.slice(0, 299)])
+        } else if (ev.event === 'pathTrace') {
+          // Unlike ExplorerTrace, a PathTrace is mutated in place as more hops
+          // correlate into it before its window closes — upsert by id.
+          const { trace } = ev.payload as { trace: PathTrace }
+          setPathTraces((prev) => {
+            const idx = prev.findIndex((t) => t.id === trace.id)
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = trace
+              return next
+            }
+            return [trace, ...prev.slice(0, 299)]
+          })
         } else if (ev.event === 'nginx') {
           const nEvent = ev.payload as { event: string; path?: string; detail?: string }
           setLogs((prev) => [
@@ -143,6 +158,8 @@ export default function App() {
       setQuickTunnels(tunnels)
       const { traces: recentTraces } = await window.core.invoke('explorer.traces.list', { limit: 100 })
       setTraces(recentTraces || [])
+      const { traces: recentPathTraces } = await window.core.invoke('trace.list', { limit: 100 })
+      setPathTraces(recentPathTraces || [])
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -227,6 +244,15 @@ export default function App() {
     }
   }
 
+  async function handleClearPathTraces() {
+    try {
+      await window.core.invoke('trace.clear', undefined)
+      setPathTraces([])
+    } catch {
+      /* ignore */
+    }
+  }
+
   const containers = resources.filter((r) => r.type === 'container')
   const tunnels = resources.filter((r) => r.type === 'tunnel')
   const dnsRecords = resources.filter((r) => r.type === 'dns_record')
@@ -283,12 +309,22 @@ export default function App() {
               quickTunnels={quickTunnels}
               logs={logs}
               tracesCount={traces.length}
+              pathTracesCount={pathTraces.length}
               busy={busy}
               error={error}
               configured={configured}
               onRescan={refresh}
               onNavigate={navigate}
               onConnect={() => setShowOnboarding(true)}
+            />
+          )}
+          {view === 'trace' && (
+            <PathTraceView
+              traces={pathTraces}
+              busy={busy}
+              error={error}
+              onRescan={refresh}
+              onClearTraces={handleClearPathTraces}
             />
           )}
           {view === 'quick-tunnel' && (

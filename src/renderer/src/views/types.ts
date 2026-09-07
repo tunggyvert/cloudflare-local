@@ -1,5 +1,6 @@
 export type View =
   | 'dashboard'
+  | 'trace'
   | 'quick-tunnel'
   | 'containers'
   | 'tunnels'
