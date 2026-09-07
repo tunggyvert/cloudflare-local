@@ -18,6 +18,7 @@ import type {
   ExplorerTrace,
   NginxServerBlock,
   NginxUpstream,
+  PathTrace,
 } from './model'
 
 export interface CoreRequests {
@@ -222,6 +223,28 @@ export interface CoreRequests {
     req: void
     res: { servers: NginxServerBlock[]; upstreams: NginxUpstream[] }
   }
+
+  /* ---- v0.4: Path Tracing --------------------------------------------- */
+
+  /** List correlated path traces, newest first. Includes traces still within their correlation window. */
+  'trace.list': {
+    req: { limit?: number; hostname?: string } | void
+    res: { traces: PathTrace[] }
+  }
+  /** Clear trace history. */
+  'trace.clear': {
+    req: void
+    res: { ok: boolean }
+  }
+  /** What telemetry sources path tracing currently has available. */
+  'trace.status': {
+    req: void
+    res: {
+      tunnels: Array<{ tunnelId: string; metricsPort: number; reachable: boolean }>
+      nginxAccessLogs: Array<{ path: string; hostname?: string; watching: boolean }>
+      containersTracked: string[]
+    }
+  }
 }
 
 export type CoreMethod = keyof CoreRequests
@@ -249,6 +272,8 @@ export interface CoreEvents {
   'explorerTrace': { trace: ExplorerTrace }
   /** Nginx configuration file changed or reloaded. */
   'nginx': { event: 'change' | 'error' | 'reload'; path?: string; detail?: string }
+  /** A path trace was created or gained another hop. `trace.complete` says whether its correlation window has closed. */
+  'pathTrace': { trace: PathTrace }
 }
 
 
