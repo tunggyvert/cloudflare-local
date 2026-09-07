@@ -18,6 +18,7 @@ linux:
   category: Development
 
 publish:
-  provider: generic
-  url: https://updates.tunggyvert.com/
+  provider: github
+  owner: tunggyvert
+  repo: cloudflare-local
 

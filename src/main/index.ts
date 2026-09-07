@@ -94,14 +94,17 @@ function createTray(): void {
 }
 
 function setupAutoUpdater(): void {
-  const feedUrl = process.env.CLOUDFLARE_LOCAL_UPDATE_URL || 'https://updates.tunggyvert.com/'
-  try {
-    autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: feedUrl,
-    })
-  } catch (err) {
-    console.warn('[updater] Failed to set feed URL:', err)
+  // If an override update URL is specified via env, use it; otherwise electron-updater automatically
+  // uses the GitHub Releases provider configured in electron-builder.yml
+  if (process.env.CLOUDFLARE_LOCAL_UPDATE_URL) {
+    try {
+      autoUpdater.setFeedURL({
+        provider: 'generic',
+        url: process.env.CLOUDFLARE_LOCAL_UPDATE_URL,
+      })
+    } catch (err) {
+      console.warn('[updater] Failed to set feed URL override:', err)
+    }
   }
 
   autoUpdater.autoDownload = true
