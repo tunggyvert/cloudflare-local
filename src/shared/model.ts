@@ -263,11 +263,50 @@ export interface NginxServerBlock {
   }>
   sourceFile: string
   line: number
+  /** Nearest `access_log` directive in scope (server block, else inherited from http{}). Absolute paths only. */
+  accessLogPath?: string
+  /** The log format name referenced by that directive, e.g. 'combined'. Informational only — line parsing is shape-based, not format-driven. */
+  accessLogFormat?: string
 }
 
 export interface NginxUpstream {
   name: string
   servers: string[]
   sourceFile: string
+}
+
+/* =========================================================================
+ * v0.4 Models: Path Tracing
+ *
+ * A trace correlates independent signals from up to five hops into one
+ * timeline. There is no shared request ID across cloudflared / nginx / Docker,
+ * so correlation is a heuristic (hostname + a short time window) — the
+ * `confidence` on each hop says whether it is real per-request data or a
+ * point-in-time health snapshot attached because it happened nearby.
+ * ========================================================================= */
+
+export type PathTraceHopKind = 'edge' | 'worker' | 'tunnel' | 'nginx' | 'container'
+
+export interface PathTraceHop {
+  hop: PathTraceHopKind
+  /** 'measured' = real data tied to this request. 'aggregate' = a health snapshot from that hop's process, not specific to this request. */
+  confidence: 'measured' | 'aggregate'
+  label: string
+  timestamp?: string
+  durationMs?: number
+  status?: string
+  detail?: Record<string, string | undefined>
+}
+
+export interface PathTrace {
+  id: string
+  hostname?: string
+  path?: string
+  method?: string
+  startedAt: string
+  updatedAt: string
+  /** False while the correlation window is still open and more hops may arrive. */
+  complete: boolean
+  hops: PathTraceHop[]
 }
 

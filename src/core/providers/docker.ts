@@ -26,6 +26,11 @@ export class DockerProvider extends EventEmitter implements Provider {
     this.docker = socketPath ? new Docker({ socketPath }) : new Docker()
   }
 
+  /** The underlying dockerode client, for callers that need capabilities beyond this Provider's interface (e.g. log tailing for path tracing). */
+  getClient(): Docker {
+    return this.docker
+  }
+
   async available() {
     try {
       const info = await this.docker.ping()

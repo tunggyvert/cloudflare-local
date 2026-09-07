@@ -7,6 +7,7 @@ import {
   IconExplorer,
   IconLogs,
   IconOrphan,
+  IconPathTrace,
   IconServer,
   IconStorage,
   IconTunnel,
@@ -16,6 +17,7 @@ import type { View } from '../views/types'
 
 const NAV: { id: View; label: string; icon: typeof IconDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: IconDashboard },
+  { id: 'trace', label: 'Path Trace', icon: IconPathTrace },
   { id: 'quick-tunnel', label: 'Quick Tunnel', icon: IconBolt },
   { id: 'containers', label: 'Containers', icon: IconContainer },
   { id: 'tunnels', label: 'Tunnels', icon: IconTunnel },

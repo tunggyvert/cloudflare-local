@@ -298,6 +298,26 @@ export class NginxParser {
     }
   }
 
+  /**
+   * Nearest `access_log` directive in scope: the server's own, else the
+   * nearest ancestor's (http{} usually), matching nginx's own override rules.
+   * Only absolute paths are usable — nginx resolves relative ones against its
+   * compiled-in prefix, which we have no reliable way to discover.
+   */
+  private findAccessLog(context: BlockContext | undefined): { path: string; format?: string } | undefined {
+    for (let block = context; block; block = block.parent) {
+      for (let i = block.directives.length - 1; i >= 0; i--) {
+        const dir = block.directives[i]
+        if (dir.name !== 'access_log' || dir.args.length === 0) continue
+        const [path, format] = dir.args
+        if (path === 'off') return undefined
+        if (!isAbsolute(path)) continue
+        return { path, format }
+      }
+    }
+    return undefined
+  }
+
   private buildServerBlock(context: BlockContext, sourceFile: string): NginxServerBlock | null {
     let serverName = ''
     const listen: string[] = []
@@ -310,6 +330,8 @@ export class NginxParser {
         listen.push(dir.args.join(' '))
       }
     }
+
+    const accessLog = this.findAccessLog(context)
 
     for (const child of context.children) {
       if (child.type === 'location') {
@@ -347,6 +369,8 @@ export class NginxParser {
       locations,
       sourceFile,
       line: context.startLine,
+      accessLogPath: accessLog?.path,
+      accessLogFormat: accessLog?.format,
     }
   }
 
