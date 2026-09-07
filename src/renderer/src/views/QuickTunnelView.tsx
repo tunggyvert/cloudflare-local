@@ -1,16 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { QuickTunnel, Resource } from '../../../shared/model'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { PageHeader } from '../components/PageHeader'
 import { StatusDot, StatusPill, toneFromText } from '../components/Status'
-import { IconBolt, IconCheck, IconCopy, IconLink, IconStop } from '../icons'
+import { IconBolt, IconCheck, IconCopy, IconDns, IconLink, IconStop, IconTunnel } from '../icons'
 import type { LogEntry } from './LogsView'
 
 const COMMON_PORTS = ['3000', '5173', '8080', '8000', '80']
 
+interface ZoneOption {
+  id: string
+  name: string
+}
+
 export function QuickTunnelView({
   quickTunnels,
   containers,
+  tunnels = [],
+  configured,
   logs,
   busy,
   error,
@@ -20,10 +27,22 @@ export function QuickTunnelView({
 }: {
   quickTunnels: QuickTunnel[]
   containers: Resource[]
+  tunnels?: Resource[]
+  configured?: boolean | null
   logs: LogEntry[]
   busy: boolean
   error: string | null
-  onStart: (targetUrl: string) => Promise<void>
+  onStart: (
+    targetUrl: string,
+    options?: {
+      mode?: 'trycloudflare' | 'custom_domain'
+      customDomain?: {
+        tunnelId: string
+        hostname: string
+        zoneId?: string
+      }
+    },
+  ) => Promise<void>
   onStop: (id: string) => Promise<void>
   onRescan: () => void
 }) {
@@ -33,6 +52,51 @@ export function QuickTunnelView({
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
 
+  // Custom Domain state
+  const [zones, setZones] = useState<ZoneOption[]>([])
+  const [loadingZones, setLoadingZones] = useState(false)
+  const [mode, setMode] = useState<'custom_domain' | 'trycloudflare'>('trycloudflare')
+  const [subdomain, setSubdomain] = useState('')
+  const [selectedZoneId, setSelectedZoneId] = useState('')
+  const [selectedTunnelId, setSelectedTunnelId] = useState('')
+
+  // Load zones if account is configured
+  useEffect(() => {
+    let cancelled = false
+    async function loadZones() {
+      if (configured === false) return
+      setLoadingZones(true)
+      try {
+        const res = await window.core.invoke('zones.list', undefined)
+        if (!cancelled && res.zones) {
+          setZones(res.zones)
+          if (res.zones.length > 0) {
+            setSelectedZoneId((prev) => prev || res.zones[0].id)
+            setMode('custom_domain')
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) setLoadingZones(false)
+      }
+    }
+    void loadZones()
+    return () => {
+      cancelled = true
+    }
+  }, [configured])
+
+  // Select default tunnel
+  useEffect(() => {
+    if (tunnels.length > 0 && !selectedTunnelId) {
+      const preferred = tunnels.find((t) => t.meta?.status === 'healthy' && t.meta?.tunnelId) || tunnels[0]
+      if (preferred?.meta?.tunnelId) {
+        setSelectedTunnelId(preferred.meta.tunnelId)
+      }
+    }
+  }, [tunnels, selectedTunnelId])
+
   // Extract running docker container ports as quick presets
   const containerPresets = containers
     .filter((c) => c.meta?.state === 'running')
@@ -40,19 +104,68 @@ export function QuickTunnelView({
       (c.origins ?? [])
         .filter((o) => o.address)
         .map((o) => ({
+          name: c.name,
           label: `${c.name} (${o.address.replace('http://', '')})`,
           value: o.address,
         })),
     )
 
-  async function handleStartTunnel(urlToStart?: string) {
+  const selectedZone = zones.find((z) => z.id === selectedZoneId) || zones[0]
+  const cleanSubdomain = subdomain.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+  const fullHostname = selectedZone
+    ? cleanSubdomain === '@' || !cleanSubdomain
+      ? selectedZone.name
+      : `${cleanSubdomain}.${selectedZone.name}`
+    : cleanSubdomain
+
+  const selectedTunnel = tunnels.find((t) => (t.meta?.tunnelId || t.id) === selectedTunnelId) || tunnels[0]
+
+  function handleSelectPreset(presetValue: string, presetName?: string) {
+    setTargetInput(presetValue)
+    if (presetName && !subdomain.trim()) {
+      const sanitized = presetName.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+      setSubdomain(sanitized)
+    }
+  }
+
+  async function handleStartTunnel(
+    urlToStart?: string,
+    explicitOptions?: {
+      mode?: 'trycloudflare' | 'custom_domain'
+      customDomain?: {
+        tunnelId: string
+        hostname: string
+        zoneId?: string
+      }
+    },
+  ) {
     const raw = urlToStart || targetInput
     if (!raw.trim()) return
 
     setStarting(true)
     setLocalError(null)
     try {
-      await onStart(raw.trim())
+      if (explicitOptions) {
+        await onStart(raw.trim(), explicitOptions)
+      } else if (mode === 'custom_domain') {
+        const tunnelId = selectedTunnelId || selectedTunnel?.meta?.tunnelId
+        if (!tunnelId) {
+          throw new Error('Please select an active Cloudflare Tunnel')
+        }
+        if (!fullHostname) {
+          throw new Error('Please enter a valid subdomain or domain name')
+        }
+        await onStart(raw.trim(), {
+          mode: 'custom_domain',
+          customDomain: {
+            tunnelId,
+            hostname: fullHostname,
+            zoneId: selectedZone?.id,
+          },
+        })
+      } else {
+        await onStart(raw.trim(), { mode: 'trycloudflare' })
+      }
       setTargetInput('')
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err))
@@ -69,7 +182,6 @@ export function QuickTunnelView({
         setCopiedId((curr) => (curr === id ? null : curr))
       }, 2000)
     } catch {
-      // Fallback if clipboard API is restricted
       const el = document.createElement('textarea')
       el.value = url
       document.body.appendChild(el)
@@ -83,6 +195,21 @@ export function QuickTunnelView({
     }
   }
 
+  async function handleRelaunch(t: QuickTunnel) {
+    if (t.tunnelType === 'custom_domain' && t.tunnelId && t.hostname) {
+      await handleStartTunnel(t.targetUrl, {
+        mode: 'custom_domain',
+        customDomain: {
+          tunnelId: t.tunnelId,
+          hostname: t.hostname,
+          zoneId: t.zoneId,
+        },
+      })
+    } else {
+      await handleStartTunnel(t.targetUrl, { mode: 'trycloudflare' })
+    }
+  }
+
   const activeTunnels = quickTunnels.filter(
     (t) => t.status === 'starting' || t.status === 'running',
   )
@@ -90,11 +217,13 @@ export function QuickTunnelView({
     (t) => t.status === 'stopped' || t.status === 'crashed',
   )
 
+  const hasCustomDomain = zones.length > 0 && tunnels.length > 0
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Quick Tunnel"
-        subtitle="Instantly share a local port over the internet via trycloudflare.com — no account required"
+        subtitle="Instantly expose a local port over the internet via your custom domain or TryCloudflare"
         busy={busy}
         onRescan={onRescan}
       />
@@ -103,14 +232,73 @@ export function QuickTunnelView({
 
       {/* Launch Card */}
       <div className="rounded border border-border bg-surface p-5">
+        {/* Mode Selector */}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex rounded border border-border bg-surface-subtle p-1 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setMode('custom_domain')}
+              disabled={!hasCustomDomain}
+              className={`flex items-center gap-1.5 rounded px-3 py-1.5 type-body-sm font-medium transition-all ${
+                mode === 'custom_domain'
+                  ? 'bg-surface text-ink shadow-xs border border-border/80 font-semibold'
+                  : !hasCustomDomain
+                  ? 'text-ink-faint cursor-not-allowed opacity-50'
+                  : 'text-ink-secondary hover:text-ink'
+              }`}
+            >
+              <IconDns className="h-4 w-4 text-accent" />
+              <span>Custom Domain</span>
+              {selectedZone && (
+                <span className="ml-1 rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[11px] font-semibold text-accent-strong">
+                  {selectedZone.name}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('trycloudflare')}
+              className={`flex items-center gap-1.5 rounded px-3 py-1.5 type-body-sm font-medium transition-all ${
+                mode === 'trycloudflare'
+                  ? 'bg-surface text-ink shadow-xs border border-border/80 font-semibold'
+                  : 'text-ink-secondary hover:text-ink'
+              }`}
+            >
+              <IconBolt className="h-4 w-4 text-accent-strong" />
+              <span>TryCloudflare (Random)</span>
+            </button>
+          </div>
+
+          {!hasCustomDomain && configured && (
+            <span className="type-body-sm text-ink-muted">
+              {zones.length === 0 ? 'No DNS zones found in account.' : 'No active Cloudflare tunnels found.'}
+            </span>
+          )}
+        </div>
+
         <h3 className="type-headline-sm text-ink mb-1 flex items-center gap-2">
-          <IconBolt className="h-4 w-4 text-accent-strong" />
-          Expose a Local Origin
+          {mode === 'custom_domain' ? (
+            <IconDns className="h-4 w-4 text-accent" />
+          ) : (
+            <IconBolt className="h-4 w-4 text-accent-strong" />
+          )}
+          {mode === 'custom_domain'
+            ? `Expose on ${fullHostname || 'your custom domain'}`
+            : 'Expose a Local Origin (TryCloudflare)'}
         </h3>
         <p className="type-body-sm text-ink-muted mb-4">
-          Enter a port number (e.g. <span className="font-mono text-ink">3000</span>) or full URL
-          (e.g. <span className="font-mono text-ink">http://localhost:8080</span>). Cloudflare will
-          assign a random public <span className="font-mono text-ink">*.trycloudflare.com</span> domain.
+          {mode === 'custom_domain' ? (
+            <>
+              Enter a port or local URL. Traffic will be routed through your Cloudflare Tunnel to{' '}
+              <span className="font-mono text-accent-strong font-medium">https://{fullHostname || 'your-domain'}</span>.
+            </>
+          ) : (
+            <>
+              Enter a port number (e.g. <span className="font-mono text-ink">3000</span>) or full URL
+              (e.g. <span className="font-mono text-ink">http://localhost:8080</span>). Cloudflare will
+              assign a random public <span className="font-mono text-ink">*.trycloudflare.com</span> domain.
+            </>
+          )}
         </p>
 
         <form
@@ -118,25 +306,115 @@ export function QuickTunnelView({
             e.preventDefault()
             void handleStartTunnel()
           }}
-          className="flex flex-col gap-3 sm:flex-row sm:items-center"
+          className="space-y-4"
         >
-          <div className="relative flex-1">
-            <input
-              type="text"
-              value={targetInput}
-              onChange={(e) => setTargetInput(e.target.value)}
-              placeholder="e.g. 3000 or http://localhost:8080"
-              className="w-full rounded border border-border bg-surface-subtle px-3.5 py-2 type-code-md text-ink placeholder:text-ink-faint focus:border-accent focus:bg-surface focus:outline-none"
-            />
+          {/* Custom Domain Configuration (when in custom_domain mode) */}
+          {mode === 'custom_domain' && (
+            <div className="rounded border border-accent/20 bg-accent/5 p-3.5 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block type-table-header text-ink-secondary mb-1">
+                    Subdomain
+                  </label>
+                  <div className="flex items-center rounded border border-border bg-surface focus-within:border-accent">
+                    <input
+                      type="text"
+                      value={subdomain}
+                      onChange={(e) => setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                      placeholder="e.g. quick, dev, api"
+                      className="flex-1 bg-transparent px-3 py-1.5 type-code-md text-ink placeholder:text-ink-faint focus:outline-none"
+                    />
+                    <span className="px-2.5 py-1.5 text-ink-muted type-code-sm border-l border-border bg-surface-subtle">
+                      .{selectedZone?.name ?? 'domain'}
+                    </span>
+                  </div>
+                  <p className="type-body-sm text-ink-faint mt-1 text-[11px]">
+                    Leave blank for root domain ({selectedZone?.name})
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block type-table-header text-ink-secondary mb-1">
+                    Domain Zone
+                  </label>
+                  <select
+                    value={selectedZoneId}
+                    onChange={(e) => setSelectedZoneId(e.target.value)}
+                    disabled={loadingZones || zones.length <= 1}
+                    className="w-full rounded border border-border bg-surface px-3 py-1.5 type-code-md text-ink focus:border-accent focus:outline-none disabled:opacity-80"
+                  >
+                    {zones.map((z) => (
+                      <option key={z.id} value={z.id}>
+                        {z.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Tunnel Selector / Indicator */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-accent/15 text-xs">
+                <div className="flex items-center gap-2">
+                  <IconTunnel className="h-3.5 w-3.5 text-accent-strong" />
+                  <span className="text-ink-secondary font-medium">Target Tunnel:</span>
+                  {tunnels.length > 1 ? (
+                    <select
+                      value={selectedTunnelId}
+                      onChange={(e) => setSelectedTunnelId(e.target.value)}
+                      className="rounded border border-border bg-surface px-2 py-0.5 type-code-sm text-ink"
+                    >
+                      {tunnels.map((t) => (
+                        <option key={t.id} value={t.meta?.tunnelId || t.id}>
+                          {t.name} ({t.meta?.status || 'active'})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="font-semibold text-ink font-mono">
+                      {selectedTunnel?.name ?? 'Default Tunnel'}
+                    </span>
+                  )}
+                  {selectedTunnel?.meta?.status && (
+                    <StatusDot tone={toneFromText(selectedTunnel.meta.status)} />
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 type-code-sm text-accent-strong font-medium">
+                  <span>Target URL:</span>
+                  <span className="underline break-all">https://{fullHostname}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Local Target Input */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={targetInput}
+                onChange={(e) => setTargetInput(e.target.value)}
+                placeholder="e.g. 3000 or http://localhost:8080"
+                className="w-full rounded border border-border bg-surface-subtle px-3.5 py-2 type-code-md text-ink placeholder:text-ink-faint focus:border-accent focus:bg-surface focus:outline-none"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={starting || !targetInput.trim() || (mode === 'custom_domain' && !fullHostname)}
+              className="flex items-center justify-center gap-2 rounded bg-accent px-4 py-2 type-body-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors shrink-0 shadow-xs"
+            >
+              {mode === 'custom_domain' ? (
+                <IconDns className="h-4 w-4" />
+              ) : (
+                <IconBolt className="h-4 w-4" />
+              )}
+              {starting
+                ? 'Starting Tunnel…'
+                : mode === 'custom_domain'
+                ? `Expose on ${fullHostname || 'Domain'}`
+                : 'Start Quick Tunnel'}
+            </button>
           </div>
-          <button
-            type="submit"
-            disabled={starting || !targetInput.trim()}
-            className="flex items-center justify-center gap-2 rounded bg-accent px-4 py-2 type-body-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
-          >
-            <IconBolt className="h-4 w-4" />
-            {starting ? 'Starting Tunnel…' : 'Start Quick Tunnel'}
-          </button>
         </form>
 
         {/* Quick presets */}
@@ -146,7 +424,7 @@ export function QuickTunnelView({
             <button
               key={port}
               type="button"
-              onClick={() => setTargetInput(port)}
+              onClick={() => handleSelectPreset(port)}
               className="rounded border border-border bg-surface-subtle px-2 py-0.5 type-code-sm text-ink-secondary hover:bg-surface-hover hover:text-ink transition-colors"
             >
               :{port}
@@ -159,7 +437,7 @@ export function QuickTunnelView({
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => setTargetInput(cp.value)}
+                  onClick={() => handleSelectPreset(cp.value, cp.name)}
                   className="rounded border border-accent/30 bg-accent/5 px-2 py-0.5 type-code-sm text-accent-strong hover:bg-accent/15 transition-colors"
                   title={`Expose ${cp.value}`}
                 >
@@ -184,7 +462,7 @@ export function QuickTunnelView({
             <IconBolt className="mx-auto h-8 w-8 text-ink-faint/60 mb-2" />
             <p className="type-body-md font-medium text-ink">No quick tunnels running</p>
             <p className="type-body-sm text-ink-muted mt-1">
-              Start one above to get a shareable TryCloudflare link in seconds.
+              Start one above to expose local ports on your domain or TryCloudflare in seconds.
             </p>
           </div>
         ) : (
@@ -194,6 +472,7 @@ export function QuickTunnelView({
               const tunnelLogs = logs.filter((l) => l.source === `quick:${t.id}`)
               const isCopied = copiedId === t.id
               const isLogsOpen = expandedLogId === t.id
+              const isCustom = t.tunnelType === 'custom_domain'
 
               return (
                 <div
@@ -202,7 +481,7 @@ export function QuickTunnelView({
                 >
                   {/* Top Bar */}
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface-subtle px-4 py-2.5">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <StatusDot tone={tone} />
                       <span className="type-body-sm font-semibold text-ink">
                         Local Origin:
@@ -210,6 +489,17 @@ export function QuickTunnelView({
                       <span className="type-code-sm rounded bg-surface px-2 py-0.5 font-medium text-ink border border-border">
                         {t.targetUrl}
                       </span>
+                      {isCustom ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-accent/10 px-2 py-0.5 type-code-sm text-[11px] font-semibold text-accent-strong border border-accent/25">
+                          <IconDns className="h-3 w-3" />
+                          Custom Domain
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded bg-surface px-2 py-0.5 type-code-sm text-[11px] font-medium text-ink-muted border border-border">
+                          <IconBolt className="h-3 w-3 text-accent-strong" />
+                          TryCloudflare
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -217,10 +507,10 @@ export function QuickTunnelView({
                       <button
                         onClick={() => void onStop(t.id)}
                         className="flex items-center gap-1 rounded border border-red-200 bg-red-50 px-2.5 py-1 type-body-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
-                        title="Stop this tunnel"
+                        title={isCustom ? 'Stop tunnel and teardown DNS route' : 'Stop this tunnel'}
                       >
                         <IconStop className="h-3.5 w-3.5" />
-                        Stop
+                        {isCustom ? 'Stop & Teardown' : 'Stop'}
                       </button>
                     </div>
                   </div>
@@ -231,14 +521,14 @@ export function QuickTunnelView({
                       <div className="flex items-center gap-3 py-2 text-ink-secondary">
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
                         <span className="type-body-sm">
-                          Connecting to Cloudflare Edge and generating public URL…
+                          Connecting to Cloudflare Edge and configuring routing…
                         </span>
                       </div>
                     ) : t.publicUrl ? (
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded border border-accent/30 bg-accent/5 p-3.5">
                         <div className="min-w-0 flex-1">
                           <p className="type-table-header text-accent-strong uppercase tracking-wider mb-1">
-                            Public URL (Shareable Link)
+                            {isCustom ? 'Public Custom Domain (Proxied)' : 'Public URL (Shareable Link)'}
                           </p>
                           <a
                             href={t.publicUrl}
@@ -291,44 +581,46 @@ export function QuickTunnelView({
                       </div>
                     )}
 
-                    {/* Collapsible log view */}
-                    <div className="mt-3">
-                      <button
-                        onClick={() =>
-                          setExpandedLogId((curr) => (curr === t.id ? null : t.id))
-                        }
-                        className="type-body-sm text-ink-muted hover:text-ink flex items-center gap-1.5 transition-colors"
-                      >
-                        <span className="text-xs">
-                          {isLogsOpen ? '▼ Hide process logs' : '▶ View process logs'}
-                        </span>
-                        {tunnelLogs.length > 0 && (
-                          <span className="text-xs font-mono">({tunnelLogs.length} lines)</span>
-                        )}
-                      </button>
-
-                      {isLogsOpen && (
-                        <div className="mt-2 max-h-48 overflow-y-auto rounded border border-border bg-surface-subtle p-2.5 font-mono text-xs text-ink-secondary space-y-1">
-                          {tunnelLogs.length === 0 ? (
-                            <p className="text-ink-faint">No logs received yet.</p>
-                          ) : (
-                            tunnelLogs.map((l, i) => (
-                              <div
-                                key={i}
-                                className={`truncate ${
-                                  l.stream === 'stderr' ? 'text-ink-secondary' : 'text-ink'
-                                }`}
-                              >
-                                <span className="text-ink-faint mr-2">
-                                  {new Date(l.at).toLocaleTimeString([], { hour12: false })}
-                                </span>
-                                {l.line}
-                              </div>
-                            ))
+                    {/* Collapsible log view for TryCloudflare processes */}
+                    {!isCustom && (
+                      <div className="mt-3">
+                        <button
+                          onClick={() =>
+                            setExpandedLogId((curr) => (curr === t.id ? null : t.id))
+                          }
+                          className="type-body-sm text-ink-muted hover:text-ink flex items-center gap-1.5 transition-colors"
+                        >
+                          <span className="text-xs">
+                            {isLogsOpen ? '▼ Hide process logs' : '▶ View process logs'}
+                          </span>
+                          {tunnelLogs.length > 0 && (
+                            <span className="text-xs font-mono">({tunnelLogs.length} lines)</span>
                           )}
-                        </div>
-                      )}
-                    </div>
+                        </button>
+
+                        {isLogsOpen && (
+                          <div className="mt-2 max-h-48 overflow-y-auto rounded border border-border bg-surface-subtle p-2.5 font-mono text-xs text-ink-secondary space-y-1">
+                            {tunnelLogs.length === 0 ? (
+                              <p className="text-ink-faint">No logs received yet.</p>
+                            ) : (
+                              tunnelLogs.map((l, i) => (
+                                <div
+                                  key={i}
+                                  className={`truncate ${
+                                    l.stream === 'stderr' ? 'text-ink-secondary' : 'text-ink'
+                                  }`}
+                                >
+                                  <span className="text-ink-faint mr-2">
+                                    {new Date(l.at).toLocaleTimeString([], { hour12: false })}
+                                  </span>
+                                  {l.line}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )
@@ -357,13 +649,18 @@ export function QuickTunnelView({
                       ({t.publicUrl})
                     </span>
                   )}
+                  {t.tunnelType === 'custom_domain' && (
+                    <span className="rounded bg-accent/10 px-1.5 py-0.2 type-code-sm text-[10px] text-accent-strong">
+                      domain
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <StatusPill tone={t.status === 'crashed' ? 'critical' : 'neutral'}>
                     {t.status}
                   </StatusPill>
                   <button
-                    onClick={() => void handleStartTunnel(t.targetUrl)}
+                    onClick={() => void handleRelaunch(t)}
                     className="type-body-sm text-accent-strong hover:underline"
                   >
                     Relaunch
@@ -374,7 +671,6 @@ export function QuickTunnelView({
           </div>
         </div>
       )}
-
     </div>
   )
 }

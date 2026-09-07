@@ -15,7 +15,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "node scripts/check-core-isolation.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node scripts/test-docker-labels.mjs && node scripts/test-cache-store.mjs && node scripts/test-nginx-parser.mjs && node scripts/test-nginx-provider.mjs && node scripts/test-d1-readonly.mjs && node scripts/test-local-explorer.mjs && node scripts/test-workers-tail.mjs && node scripts/test-nginx-accesslog.mjs && node scripts/test-path-correlator.mjs",
+    "test": "node --experimental-strip-types scripts/test-docker-labels.mjs && node --experimental-strip-types scripts/test-cache-store.mjs && node --experimental-strip-types scripts/test-nginx-parser.mjs && node --experimental-strip-types scripts/test-nginx-provider.mjs && node --experimental-strip-types scripts/test-d1-readonly.mjs && node --experimental-strip-types scripts/test-local-explorer.mjs && node --experimental-strip-types scripts/test-workers-tail.mjs && node --experimental-strip-types scripts/test-nginx-accesslog.mjs && node --experimental-strip-types scripts/test-path-correlator.mjs && node --experimental-strip-types scripts/test-quick-tunnel.mjs",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder",
     "check:core": "node scripts/check-core-isolation.mjs"

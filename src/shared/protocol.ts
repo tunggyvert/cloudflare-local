@@ -37,9 +37,18 @@ export interface CoreRequests {
   'tunnel.run': { req: { tunnelId: string }; res: { pid: number } }
   'tunnel.stop': { req: { tunnelId: string }; res: { stopped: boolean } }
 
-  /** Start an ad-hoc TryCloudflare quick tunnel for a local URL/port. */
+  /** Start an ad-hoc TryCloudflare or Custom Domain quick tunnel for a local URL/port. */
   'quickTunnel.start': {
-    req: { targetUrl: string; id?: string }
+    req: {
+      targetUrl: string
+      id?: string
+      mode?: 'trycloudflare' | 'custom_domain'
+      customDomain?: {
+        tunnelId: string
+        hostname: string
+        zoneId?: string
+      }
+    }
     res: { tunnel: QuickTunnel }
   }
   /** Stop a running TryCloudflare quick tunnel. */

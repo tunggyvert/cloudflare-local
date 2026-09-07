@@ -30,12 +30,12 @@ import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/p
 const VERSION = '0.4.0'
 
 const supervisor = new Supervisor()
-const quickTunnels = new QuickTunnelManager(supervisor)
 const docker = new DockerProvider()
 const nginx = new NginxProvider()
 const cache = new LocalCacheStore()
 let cloudflare: CloudflareProvider | null = null
 let accountMeta: { accountId: string; label: string } | null = null
+const quickTunnels = new QuickTunnelManager(supervisor, () => cloudflare, cache)
 
 const workerTails = new WorkerTailManager(
   () => cloudflare?.getClient() ?? null,
@@ -387,19 +387,32 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return { stopped: await supervisor.stop(`cloudflared:${tunnelId}`) }
     }
 
-    /* ---- quick tunnels (trycloudflare) ------------------------------ */
-
-    case 'quickTunnel.start': {
-      const { targetUrl, id } = req.params as { targetUrl: string; id?: string }
-      const tunnel = quickTunnels.start(targetUrl, id)
-      return { tunnel }
-    }
-
-    case 'quickTunnel.stop': {
-      const { id } = req.params as { id: string }
-      const stopped = await quickTunnels.stop(id)
-      return { stopped }
-    }
+    /* ---- quick tunnels (trycloudflare & custom domain) ------------- */
+ 
+     case 'quickTunnel.start': {
+       const { targetUrl, id, mode, customDomain } = req.params as {
+         targetUrl: string
+         id?: string
+         mode?: 'trycloudflare' | 'custom_domain'
+         customDomain?: {
+           tunnelId: string
+           hostname: string
+           zoneId?: string
+         }
+       }
+       const tunnel = await quickTunnels.start(targetUrl, { customId: id, mode, customDomain })
+       if (mode === 'custom_domain') {
+         void runDiscovery()
+       }
+       return { tunnel }
+     }
+ 
+     case 'quickTunnel.stop': {
+       const { id } = req.params as { id: string }
+       const stopped = await quickTunnels.stop(id)
+       void runDiscovery()
+       return { stopped }
+     }
 
     case 'quickTunnel.list':
       return { tunnels: quickTunnels.list() }

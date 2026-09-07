@@ -131,6 +131,10 @@ export interface QuickTunnel {
   status: 'starting' | 'running' | 'stopped' | 'crashed'
   createdAt: string
   error?: string
+  tunnelType?: 'trycloudflare' | 'custom_domain'
+  hostname?: string
+  tunnelId?: string
+  zoneId?: string
 }
 
 /* =========================================================================
