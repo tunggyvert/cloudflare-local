@@ -19,11 +19,15 @@ import { LocalCacheStore } from './cache/store'
 import { WorkerTailManager } from './workers/tail'
 import { LocalExplorerManager } from './explorer/manager'
 import { readToken, saveToken, deleteToken } from './secrets'
+import { PathTraceCorrelator } from './tracing/correlator'
+import { TunnelMetricsMonitor, getFreePort, type TunnelMetricsSnapshot } from './tracing/tunnel-metrics'
+import { NginxAccessLogTailer, type NginxAccessLogEntry } from './tracing/nginx-access-log'
+import { ContainerLogTailer } from './tracing/container-log-tailer'
 import type { Provider } from './providers/types'
-import type { Resource, Service } from '../shared/model'
+import type { Resource, Service, PathTraceHop } from '../shared/model'
 import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/protocol'
 
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 
 const supervisor = new Supervisor()
 const quickTunnels = new QuickTunnelManager(supervisor)
@@ -38,6 +42,12 @@ const workerTails = new WorkerTailManager(
   () => cloudflare?.getAccountId() ?? null
 )
 const explorer = new LocalExplorerManager(supervisor)
+
+/* ---- v0.4: path tracing --------------------------------------------- */
+const correlator = new PathTraceCorrelator()
+const tunnelMetrics = new TunnelMetricsMonitor()
+const nginxAccessLog = new NginxAccessLogTailer()
+const containerLogs = new ContainerLogTailer(() => docker.getClient())
 
 /** Build the active provider list dynamically based on what's configured. */
 function activeProviders(): Provider[] {
@@ -89,7 +99,10 @@ nginx.on('change', (e) => {
   void runDiscovery()
 })
 nginx.on('error', (e) => emit('nginx', e))
-workerTails.on('tail', (e) => emit('workerTail', e))
+workerTails.on('tail', (e) => {
+  emit('workerTail', e)
+  feedWorkerTailToCorrelator(e)
+})
 workerTails.on('error', (e) => {
   emit('log', {
     source: `worker:${e.scriptName}`,
@@ -99,6 +112,202 @@ workerTails.on('error', (e) => {
   })
 })
 explorer.on('trace', (trace) => emit('explorerTrace', { trace }))
+
+correlator.on('trace', (trace) => emit('pathTrace', { trace }))
+nginxAccessLog.on('access', (e: NginxAccessLogEntry) => feedNginxAccessLogToCorrelator(e))
+nginxAccessLog.on('error', (msg: string) => {
+  emit('log', { source: 'nginx-access-log', stream: 'stderr', line: msg, at: new Date().toISOString() })
+})
+
+/* ---- v0.4: path trace correlation feeds ------------------------------ */
+
+function safeParseUrl(raw: string): URL | null {
+  try {
+    return new URL(raw)
+  } catch {
+    return null
+  }
+}
+
+/** Splits one Worker tail event into an 'edge' hop (from the `cf` object) and a 'worker' hop. */
+function feedWorkerTailToCorrelator(e: { scriptName: string; event: import('../shared/model').WorkerTailEvent }): void {
+  const { scriptName, event } = e
+  const url = event.request?.url ? safeParseUrl(event.request.url) : null
+  const hostname = url?.hostname
+  const path = url?.pathname
+  const method = event.request?.method
+
+  if (event.request?.cf) {
+    const cf = event.request.cf
+    correlator.ingest({
+      hostname,
+      path,
+      method,
+      hop: {
+        hop: 'edge',
+        confidence: 'measured',
+        label: 'Cloudflare Edge',
+        timestamp: event.eventTimestamp,
+        detail: {
+          colo: cf.colo !== undefined ? String(cf.colo) : undefined,
+          country: cf.country !== undefined ? String(cf.country) : undefined,
+          httpProtocol: cf.httpProtocol !== undefined ? String(cf.httpProtocol) : undefined,
+          tlsVersion: cf.tlsVersion !== undefined ? String(cf.tlsVersion) : undefined,
+          asn: cf.asn !== undefined ? String(cf.asn) : undefined,
+        },
+      },
+    })
+  }
+
+  correlator.ingest({
+    hostname,
+    path,
+    method,
+    hop: {
+      hop: 'worker',
+      confidence: 'measured',
+      label: scriptName,
+      timestamp: event.eventTimestamp,
+      durationMs: event.executionTimeMs,
+      status: event.outcome,
+      detail: {
+        exceptions: event.exceptions.length ? String(event.exceptions.length) : undefined,
+        logs: event.logs.length ? String(event.logs.length) : undefined,
+      },
+    },
+  })
+}
+
+/** Maps a hostname to the Cloudflare tunnel whose ingress serves it, so a nginx/container hit can pull that tunnel's latest health snapshot. */
+function findTunnelIdForHostname(hostname?: string): string | undefined {
+  if (!hostname) return undefined
+  const tunnelResource = lastDiscovery.find(
+    (r) =>
+      r.provider === 'cloudflare' &&
+      r.type === 'tunnel' &&
+      (r.routes ?? []).some((rt) => rt.hostname === hostname),
+  )
+  return tunnelResource?.meta?.tunnelId
+}
+
+function tunnelHopFromSnapshot(snapshot: TunnelMetricsSnapshot): PathTraceHop {
+  return {
+    hop: 'tunnel',
+    confidence: 'aggregate',
+    label: 'cloudflared',
+    timestamp: snapshot.at,
+    status: snapshot.reachable ? 'healthy' : 'unreachable',
+    detail: {
+      concurrentRequests: snapshot.concurrentRequests !== undefined ? String(snapshot.concurrentRequests) : undefined,
+      haConnections: snapshot.haConnections !== undefined ? String(snapshot.haConnections) : undefined,
+      requestsInInterval: snapshot.requestsInInterval !== undefined ? String(snapshot.requestsInInterval) : undefined,
+      errorsInInterval: snapshot.errorsInInterval !== undefined ? String(snapshot.errorsInInterval) : undefined,
+    },
+  }
+}
+
+/**
+ * Best-effort match from a logged request path to the docker container behind
+ * it: longest-prefix match against the owning server block's `location`
+ * blocks, resolved to a currently-discovered container whose origin address
+ * matches that `proxy_pass`. There is no shared identifier to do this
+ * precisely — this is the same heuristic ceiling as the hostname correlation.
+ */
+function resolveContainerForNginxHit(hostname: string | undefined, url: string): { containerId?: string; containerName?: string } {
+  const servers = nginx.getServers()
+  const server = (hostname ? servers.find((s) => s.serverName === hostname) : undefined) ?? servers[0]
+  if (!server) return {}
+
+  const path = url.split('?')[0]
+  const proxyPass = server.locations
+    .filter((l) => l.proxyPass && path.startsWith(l.path))
+    .sort((a, b) => b.path.length - a.path.length)[0]?.proxyPass
+  if (!proxyPass) return {}
+
+  const target = proxyPass.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const match = lastDiscovery
+    .filter((r) => r.provider === 'docker' && r.type === 'container')
+    .flatMap((r) => (r.origins ?? []).map((o) => ({ origin: o, name: r.name, id: r.id })))
+    .find(({ origin }) => {
+      const addr = origin.address.replace(/^https?:\/\//, '')
+      return target === addr || target.startsWith(`${addr}/`)
+    })
+  if (!match) return {}
+
+  return { containerId: match.id.replace(/^docker:container:/, ''), containerName: match.name }
+}
+
+function feedNginxAccessLogToCorrelator(e: NginxAccessLogEntry): void {
+  correlator.ingest({
+    hostname: e.hostname,
+    path: e.url,
+    method: e.method,
+    hop: {
+      hop: 'nginx',
+      confidence: 'measured',
+      label: e.hostname ?? 'nginx',
+      timestamp: e.timestamp,
+      durationMs: e.requestTimeMs,
+      status: String(e.status),
+      detail: {
+        upstreamTimeMs: e.upstreamTimeMs !== undefined ? String(e.upstreamTimeMs) : undefined,
+        bytesSent: String(e.bytesSent),
+        remoteAddr: e.remoteAddr,
+      },
+    },
+  })
+
+  const { containerId, containerName } = resolveContainerForNginxHit(e.hostname, e.url)
+  if (containerId && containerName) {
+    const lines = containerLogs.linesNear(containerId, e.timestamp, 1500)
+    if (lines.length > 0) {
+      correlator.ingest({
+        hostname: e.hostname,
+        path: e.url,
+        method: e.method,
+        hop: {
+          hop: 'container',
+          confidence: 'measured',
+          label: containerName,
+          timestamp: e.timestamp,
+          detail: { lines: lines.map((l) => `[${l.stream}] ${l.line}`).join('\n').slice(0, 2000) },
+        },
+      })
+    }
+  }
+
+  const tunnelId = findTunnelIdForHostname(e.hostname)
+  const snapshot = tunnelId ? tunnelMetrics.getSnapshot(tunnelId) : undefined
+  if (snapshot) {
+    correlator.ingest({ hostname: e.hostname, path: e.url, method: e.method, hop: tunnelHopFromSnapshot(snapshot) })
+  }
+}
+
+/** Re-derives which nginx access log files and which docker containers path tracing should watch, from the latest discovery. */
+function refreshTracingTargets(): void {
+  const servers = nginx.getServers()
+  const byPath = new Map<string, Set<string>>()
+  for (const s of servers) {
+    if (!s.accessLogPath) continue
+    if (!byPath.has(s.accessLogPath)) byPath.set(s.accessLogPath, new Set())
+    byPath.get(s.accessLogPath)!.add(s.serverName)
+  }
+  nginxAccessLog.setTargets(
+    [...byPath.entries()].map(([path, hostnames]) => ({
+      path,
+      // Ambiguous when >1 server block shares a log file — no $host field to disambiguate lines by.
+      hostname: hostnames.size === 1 ? [...hostnames][0] : undefined,
+    })),
+  )
+
+  const services = assemble(lastDiscovery)
+  const originIdsInPath = new Set(services.flatMap((s) => s.origins.map((o) => o.id)))
+  const trackedContainers = lastDiscovery
+    .filter((r) => r.provider === 'docker' && r.type === 'container')
+    .filter((r) => (r.origins ?? []).some((o) => originIdsInPath.has(o.id)))
+    .map((r) => ({ id: r.id.replace(/^docker:container:/, ''), name: r.name }))
+  containerLogs.setTracked(trackedContainers)
+}
 
 /** Core discovery runner */
 async function runDiscovery(): Promise<Resource[]> {
@@ -118,6 +327,8 @@ async function runDiscovery(): Promise<Resource[]> {
 
   // Persist latest state to SQLite cache
   cache.saveResources(lastDiscovery)
+
+  refreshTracingTargets()
 
   emit('discovered', { count: lastDiscovery.length, at: new Date().toISOString() })
   return lastDiscovery
@@ -150,17 +361,29 @@ async function handle(req: RpcRequest): Promise<unknown> {
 
     case 'tunnel.run': {
       const { tunnelId } = req.params as { tunnelId: string }
+      const procId = `cloudflared:${tunnelId}`
+      const alreadyRunning = supervisor.get(procId) !== undefined
+
+      // Grab a local port for cloudflared's Prometheus metrics endpoint so path
+      // tracing can poll tunnel health. Best-effort: tracing just runs without
+      // a tunnel hop if a port can't be allocated.
+      const metricsPort = alreadyRunning ? undefined : await getFreePort().catch(() => undefined)
+      const args = ['tunnel', 'run', tunnelId]
+      if (metricsPort) args.push('--metrics', `127.0.0.1:${metricsPort}`)
+
       const proc = supervisor.spawn({
-        id: `cloudflared:${tunnelId}`,
+        id: procId,
         command: 'cloudflared',
-        args: ['tunnel', 'run', tunnelId],
+        args,
         restart: true,
       })
+      if (metricsPort) tunnelMetrics.register(tunnelId, metricsPort)
       return { pid: proc.pid ?? -1 }
     }
 
     case 'tunnel.stop': {
       const { tunnelId } = req.params as { tunnelId: string }
+      tunnelMetrics.unregister(tunnelId)
       return { stopped: await supervisor.stop(`cloudflared:${tunnelId}`) }
     }
 
@@ -468,6 +691,24 @@ async function handle(req: RpcRequest): Promise<unknown> {
         upstreams: nginx.getUpstreams(),
       }
 
+    /* ---- v0.4: Path Tracing ------------------------------------------- */
+
+    case 'trace.list': {
+      const { limit, hostname } = (req.params as { limit?: number; hostname?: string } | undefined) ?? {}
+      return { traces: correlator.list(limit ?? 100, hostname) }
+    }
+
+    case 'trace.clear':
+      correlator.clear()
+      return { ok: true }
+
+    case 'trace.status':
+      return {
+        tunnels: tunnelMetrics.list(),
+        nginxAccessLogs: nginxAccessLog.list(),
+        containersTracked: containerLogs.trackedIds(),
+      }
+
     default:
       throw new Error(`unknown method: ${String(req.method)}`)
   }
@@ -536,6 +777,10 @@ process.on('message', async (msg: CoreMessage) => {
 async function shutdown(): Promise<void> {
   docker.stopEventListener()
   nginx.stopWatcher()
+  nginxAccessLog.stop()
+  containerLogs.stop()
+  tunnelMetrics.stop()
+  correlator.stop()
   await workerTails.stopAll()
   await explorer.stopAll()
   cache.close()
