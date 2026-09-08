@@ -23,6 +23,7 @@ export function OrphansView({
   const [pendingChanges, setPendingChanges] = useState<Change[]>([])
   const [cleaning, setCleaning] = useState(false)
   const [results, setResults] = useState<ApplyResult[] | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const certainOrphans = orphans.filter((o) => o.confidence === 'certain')
   const selectedCertainOrphans = certainOrphans.filter((o) => selectedIds.has(o.cleanup.id))
@@ -35,23 +36,13 @@ export function OrphansView({
     }
   }
 
-  const handleToggleSelect = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    const next = new Set(selectedIds)
-    if (next.has(id)) {
-      next.delete(id)
-    } else {
-      next.add(id)
-    }
-    setSelectedIds(next)
-  }
-
   const handleToggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id))
   }
 
   async function handleCleanup() {
     setCleaning(true)
+    setLocalError(null)
     try {
       const { results } = await window.core.invoke('orphan.cleanup', {
         changeIds: pendingChanges.map(c => c.id)
@@ -63,7 +54,7 @@ export function OrphansView({
       // Re-scan to refresh orphan list
       onRescan()
     } catch (err) {
-      // Show error
+      setLocalError(err instanceof Error ? err.message : String(err))
     } finally {
       setCleaning(false)
     }
@@ -75,7 +66,7 @@ export function OrphansView({
     setConfirmOpen(true)
   }
 
-  const handleCleanLikely = (change: Change, e: React.MouseEvent) => {
+  const handleCleanSingle = (change: Change, e: React.MouseEvent) => {
     e.stopPropagation()
     setPendingChanges([change])
     setConfirmOpen(true)
@@ -104,6 +95,7 @@ export function OrphansView({
       </PageHeader>
       
       {error && <ErrorBanner message={error} />}
+      {localError && <ErrorBanner message={localError} />}
 
       {results && (
         <div className="mb-4 rounded border border-border bg-surface-subtle p-4">
@@ -136,8 +128,10 @@ export function OrphansView({
               {certainOrphans.length > 0 && (
                 <input
                   type="checkbox"
-                  checked={selectedIds.size === certainOrphans.length}
+                  checked={certainOrphans.length > 0 && selectedIds.size === certainOrphans.length}
                   onChange={handleToggleSelectAll}
+                  className="rounded border-border"
+                  title="Select all certain orphans"
                 />
               )}
             </Th>
@@ -161,8 +155,17 @@ export function OrphansView({
                       <input
                         type="checkbox"
                         checked={selectedIds.has(o.cleanup.id)}
-                        onClick={(e) => handleToggleSelect(o.cleanup.id, e)}
-                        onChange={() => {}}
+                        onChange={(e) => {
+                          const next = new Set(selectedIds)
+                          if (e.target.checked) {
+                            next.add(o.cleanup.id)
+                          } else {
+                            next.delete(o.cleanup.id)
+                          }
+                          setSelectedIds(next)
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded border-border"
                       />
                     )}
                   </Td>
@@ -177,14 +180,13 @@ export function OrphansView({
                     </StatusPill>
                   </Td>
                   <Td align="right">
-                    {!isCertain && (
-                      <button
-                        onClick={(e) => handleCleanLikely(o.cleanup, e)}
-                        className="type-body-sm font-medium text-red-600 hover:text-red-700"
-                      >
-                        Clean up
-                      </button>
-                    )}
+                    <button
+                      onClick={(e) => handleCleanSingle(o.cleanup, e)}
+                      className="type-body-sm font-medium text-red-600 hover:text-red-700 hover:underline transition-colors"
+                      title="Clean up this orphaned resource"
+                    >
+                      Clean up
+                    </button>
                   </Td>
                 </Tr>
 
@@ -218,16 +220,14 @@ export function OrphansView({
                           </div>
                         ))}
                       </div>
-                      {!isCertain && (
-                        <div className="mt-3">
-                          <button
-                            onClick={(e) => handleCleanLikely(o.cleanup, e)}
-                            className="type-body-sm font-medium text-red-600 hover:text-red-700"
-                          >
-                            Clean up
-                          </button>
-                        </div>
-                      )}
+                      <div className="mt-3">
+                        <button
+                          onClick={(e) => handleCleanSingle(o.cleanup, e)}
+                          className="type-body-sm font-medium rounded bg-red-600 px-3 py-1.5 text-white hover:bg-red-700 transition-colors shadow-xs"
+                        >
+                          Clean up this resource
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )}

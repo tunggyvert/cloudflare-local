@@ -186,6 +186,10 @@ export default function App() {
     await window.core.invoke('account.remove', undefined)
     setConfigured(false)
     setAccountLabel(undefined)
+    setResources((prev) => prev.filter((r) => r.provider !== 'cloudflare'))
+    setOrphans([])
+    setTailLogs([])
+    setActiveTailScript(null)
     await refresh()
   }
 
@@ -381,6 +385,7 @@ export default function App() {
               activeTailScript={activeTailScript}
               onStartTail={handleStartTail}
               onStopTail={handleStopTail}
+              onClearTailLogs={() => setTailLogs([])}
             />
           )}
           {view === 'bindings' && (
@@ -413,7 +418,11 @@ export default function App() {
         </main>
       </div>
 
-      <OnboardingModal open={showOnboarding} onConnected={handleConnected} />
+      <OnboardingModal
+        open={showOnboarding}
+        onConnected={handleConnected}
+        onClose={configured ? () => setShowOnboarding(false) : undefined}
+      />
       <ExposeContainerModal
         container={selectedContainerForExpose}
         tunnels={tunnels}

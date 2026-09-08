@@ -21,6 +21,7 @@ export function WorkersView({
   activeTailScript,
   onStartTail,
   onStopTail,
+  onClearTailLogs,
 }: {
   busy: boolean
   error: string | null
@@ -30,6 +31,7 @@ export function WorkersView({
   activeTailScript: string | null
   onStartTail: (scriptName: string) => Promise<void>
   onStopTail: (scriptName: string) => Promise<void>
+  onClearTailLogs?: () => void
 }) {
   const [workers, setWorkers] = useState<WorkerSummary[]>([])
   const [loading, setLoading] = useState(false)
@@ -44,6 +46,7 @@ export function WorkersView({
     `export default {\n  async fetch(request, env, ctx) {\n    return new Response("Hello from Cloudflare Worker!");\n  },\n};\n`
   )
   const [deploying, setDeploying] = useState(false)
+  const [deployError, setDeployError] = useState<string | null>(null)
 
   // Tail log filtering
   const [logFilter, setLogFilter] = useState<'all' | 'error' | 'warn' | 'log'>('all')
@@ -81,6 +84,7 @@ export function WorkersView({
     if (!deployName.trim() || !deployCode.trim()) return
 
     setDeploying(true)
+    setDeployError(null)
     setLocalError(null)
     try {
       await window.core.invoke('workers.deploy', {
@@ -92,7 +96,9 @@ export function WorkersView({
       await loadWorkers()
       onRescan()
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      setDeployError(msg)
+      setLocalError(msg)
     } finally {
       setDeploying(false)
     }
@@ -133,7 +139,10 @@ export function WorkersView({
       >
         {configured && (
           <button
-            onClick={() => setDeployModalOpen(true)}
+            onClick={() => {
+              setDeployError(null)
+              setDeployModalOpen(true)
+            }}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 type-body-sm font-medium text-white hover:bg-accent/90 transition-colors"
           >
             <IconCode className="h-4 w-4" />
@@ -390,6 +399,15 @@ export function WorkersView({
                 Auto-scroll
               </label>
 
+              {onClearTailLogs && (
+                <button
+                  onClick={onClearTailLogs}
+                  className="rounded border border-border bg-surface px-2.5 py-1 type-body-sm text-ink-secondary hover:bg-surface-hover hover:text-ink transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+
               <button
                 onClick={() => void onStopTail(activeTailScript)}
                 className="flex items-center gap-1 rounded bg-red-600 px-2.5 py-1 type-body-sm font-medium text-white hover:bg-red-700"
@@ -502,6 +520,13 @@ export function WorkersView({
             </div>
 
             <form onSubmit={handleDeploy} className="space-y-4">
+              {deployError && (
+                <div className="rounded border border-red-300 bg-red-50 p-3 type-body-sm text-red-700">
+                  <div className="font-semibold mb-0.5">Deployment Failed</div>
+                  <div>{deployError}</div>
+                </div>
+              )}
+
               <div>
                 <label className="block type-table-header mb-1 text-ink-muted">Script Name</label>
                 <input
@@ -509,7 +534,10 @@ export function WorkersView({
                   placeholder="e.g. my-api-worker"
                   required
                   value={deployName}
-                  onChange={(e) => setDeployName(e.target.value)}
+                  onChange={(e) => {
+                    setDeployName(e.target.value)
+                    setDeployError(null)
+                  }}
                   className="w-full rounded border border-border bg-surface px-3 py-2 type-body-sm text-ink focus:border-accent focus:outline-none"
                 />
               </div>
@@ -520,7 +548,10 @@ export function WorkersView({
                   rows={10}
                   required
                   value={deployCode}
-                  onChange={(e) => setDeployCode(e.target.value)}
+                  onChange={(e) => {
+                    setDeployCode(e.target.value)
+                    setDeployError(null)
+                  }}
                   className="w-full rounded border border-border bg-surface p-3 font-mono text-xs text-ink focus:border-accent focus:outline-none"
                 />
               </div>

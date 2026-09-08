@@ -29,6 +29,16 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
 }
 
+function formatJsonOrRaw(val: string | null): string {
+  if (!val) return '<empty>'
+  try {
+    const parsed = JSON.parse(val)
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return val
+  }
+}
+
 export function BindingsView({
   busy,
   error,
@@ -133,23 +143,35 @@ export function BindingsView({
     }
   }, [configured, tab])
 
-  // Load KV keys when selected KV changes or prefix changes
+  // Load KV keys when selected KV changes or prefix changes (debounced)
   useEffect(() => {
     if (!configured || !selectedKv) return
-    void (async () => {
-      try {
-        const res = await window.core.invoke('kv.keys.list', {
-          namespaceId: selectedKv.id,
-          prefix: kvPrefix || undefined,
-        })
-        setKvKeys(res.keys || [])
-        setSelectedKey(null)
-        setKeyValue(null)
-      } catch (err) {
-        setLocalError(err instanceof Error ? err.message : String(err))
-      }
-    })()
-  }, [selectedKv, kvPrefix])
+    let active = true
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await window.core.invoke('kv.keys.list', {
+            namespaceId: selectedKv.id,
+            prefix: kvPrefix.trim() || undefined,
+          })
+          if (active) {
+            setKvKeys(res.keys || [])
+            setSelectedKey(null)
+            setKeyValue(null)
+          }
+        } catch (err) {
+          if (active) {
+            setLocalError(err instanceof Error ? err.message : String(err))
+          }
+        }
+      })()
+    }, 250)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [selectedKv, kvPrefix, configured])
 
   // Load KV value when key selected
   async function loadKeyValue(key: string) {
@@ -169,42 +191,68 @@ export function BindingsView({
     }
   }
 
-  // Load R2 objects when bucket or prefix changes
+  // Load R2 objects when bucket or prefix changes (debounced)
   useEffect(() => {
     if (!configured || !selectedBucket) return
-    void (async () => {
-      try {
-        const res = await window.core.invoke('r2.objects.list', {
-          bucketName: selectedBucket.name,
-          prefix: r2Prefix || undefined,
-        })
-        setR2Objects(res.objects || [])
-        setSelectedObject(null)
-      } catch (err) {
-        setLocalError(err instanceof Error ? err.message : String(err))
-      }
-    })()
-  }, [selectedBucket, r2Prefix])
+    let active = true
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await window.core.invoke('r2.objects.list', {
+            bucketName: selectedBucket.name,
+            prefix: r2Prefix.trim() || undefined,
+          })
+          if (active) {
+            setR2Objects(res.objects || [])
+            setSelectedObject(null)
+          }
+        } catch (err) {
+          if (active) {
+            setLocalError(err instanceof Error ? err.message : String(err))
+          }
+        }
+      })()
+    }, 250)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [selectedBucket, r2Prefix, configured])
 
   // Load D1 tables when database changes
   useEffect(() => {
     if (!configured || !selectedD1) return
+    let active = true
+    setSelectedTable(null)
+    setQueryResult(null)
+    setD1Tables([])
+
     void (async () => {
       try {
         const res = await window.core.invoke('d1.tables.list', {
           databaseId: selectedD1.uuid,
         })
+        if (!active) return
         setD1Tables(res.tables || [])
-        if (res.tables.length > 0) {
+        if (res.tables && res.tables.length > 0) {
           const firstTable = res.tables[0].name
           setSelectedTable(firstTable)
           setD1Query(`SELECT * FROM ${firstTable} LIMIT 50;`)
+        } else {
+          setD1Query(`SELECT 1 as connected;`)
         }
       } catch (err) {
-        setLocalError(err instanceof Error ? err.message : String(err))
+        if (active) {
+          setLocalError(err instanceof Error ? err.message : String(err))
+        }
       }
     })()
-  }, [selectedD1])
+
+    return () => {
+      active = false
+    }
+  }, [selectedD1, configured])
 
   async function handleRunD1Query(e?: React.FormEvent) {
     if (e) e.preventDefault()
@@ -380,7 +428,7 @@ export function BindingsView({
                   <div className="type-code-xs font-semibold text-ink break-all">{selectedKey}</div>
                   <pre className="max-h-96 overflow-auto rounded bg-surface-subtle p-3 font-mono text-xs text-ink border border-border whitespace-pre-wrap">
                     {keyValue.isJson
-                      ? JSON.stringify(JSON.parse(keyValue.value || '{}'), null, 2)
+                      ? formatJsonOrRaw(keyValue.value)
                       : keyValue.value || '<empty>'}
                   </pre>
                 </div>
