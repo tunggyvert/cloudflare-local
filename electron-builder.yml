@@ -16,3 +16,9 @@ win:
 linux:
   target: [AppImage, deb]
   category: Development
+
+publish:
+  provider: github
+  owner: tunggyvert
+  repo: cloudflare-local
+

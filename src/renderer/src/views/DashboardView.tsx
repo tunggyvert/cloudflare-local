@@ -77,12 +77,12 @@ export function DashboardView({
 
   const summary: { view: View; icon: typeof IconContainer; label: string; total: number; detail: string }[] = [
     { view: 'trace', icon: IconPathTrace, label: 'Path Trace', total: pathTracesCount, detail: 'edge → worker → tunnel → nginx → container' },
-    { view: 'quick-tunnel', icon: IconBolt, label: 'Quick Tunnel', total: activeQuick.length, detail: activeQuick.length > 0 ? `${activeQuick.length} active (trycloudflare)` : 'expose local port' },
+    { view: 'quick-tunnel', icon: IconBolt, label: 'Quick Tunnel', total: activeQuick.length, detail: activeQuick.length > 0 ? `${activeQuick.length} active` : 'expose local port' },
     { view: 'containers', icon: IconContainer, label: 'Containers', total: containers.length, detail: `${running} running` },
     { view: 'tunnels', icon: IconTunnel, label: 'Tunnels', total: tunnels.length, detail: `${tunnels.length} discovered` },
     { view: 'dns', icon: IconDns, label: 'DNS Records', total: dnsRecords.length, detail: `${dnsRecords.length} tunnel CNAMEs` },
     { view: 'workers', icon: IconWorker, label: 'Workers', total: workers.length, detail: `${workers.length} scripts deployed` },
-    { view: 'bindings', icon: IconStorage, label: 'Storage', total: 3, detail: 'KV, R2, D1 browser' },
+    { view: 'bindings', icon: IconStorage, label: 'Storage', total: configured ? 3 : 0, detail: 'KV, R2, D1 browser' },
     { view: 'explorer', icon: IconExplorer, label: 'Explorer', total: tracesCount, detail: 'wrangler dev traces' },
     { view: 'nginx', icon: IconServer, label: 'Nginx', total: nginxServers.length, detail: `${nginxServers.length} server blocks` },
     { view: 'orphans', icon: IconOrphan, label: 'Orphans', total: orphans.length, detail: `${certain} certain, ${likely} likely` },
@@ -142,7 +142,7 @@ export function DashboardView({
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <IconBolt className="h-4 w-4 text-accent-strong" />
-              <h3 className="type-headline-sm text-ink">Active Quick Tunnels (TryCloudflare)</h3>
+              <h3 className="type-headline-sm text-ink">Active Quick Tunnels</h3>
             </div>
             <button
               onClick={() => onNavigate('quick-tunnel')}
@@ -168,6 +168,11 @@ export function DashboardView({
                     </span>
                   ) : (
                     <span className="type-body-sm text-ink-muted italic">connecting…</span>
+                  )}
+                  {t.tunnelType === 'custom_domain' && (
+                    <span className="rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] font-medium text-accent-strong">
+                      custom domain
+                    </span>
                   )}
                 </div>
 

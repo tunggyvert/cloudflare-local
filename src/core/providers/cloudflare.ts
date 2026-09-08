@@ -745,6 +745,97 @@ export class CloudflareProvider implements Provider {
     return { ok: true, ingressAdded, dnsCreated, hostname }
   }
 
+  /**
+   * Teardown of an exposed hostname route:
+   * 1. Removes the ingress rule for this hostname from the Cloudflare Tunnel.
+   * 2. Optionally deletes the DNS CNAME record pointing at this tunnel.
+   */
+  async unexposeHostname(params: {
+    tunnelId: string
+    hostname: string
+    path?: string
+    zoneId?: string
+    deleteDns?: boolean
+  }): Promise<{ ok: boolean; ingressRemoved: boolean; dnsDeleted: boolean }> {
+    const { tunnelId, hostname, path, deleteDns = true } = params
+    if (!tunnelId) throw new Error('Tunnel ID is required')
+    if (!hostname) throw new Error('Hostname is required')
+
+    let ingressRemoved = false
+    let dnsDeleted = false
+
+    // 1. Remove from tunnel ingress
+    try {
+      const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
+        tunnelId,
+        { account_id: this.cfg.accountId }
+      )
+      const currentIngress = (existing?.config?.ingress ?? []) as Array<{
+        hostname?: string
+        path?: string
+        service: string
+      }>
+
+      const filtered = currentIngress.filter(
+        (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
+      )
+
+      if (filtered.length !== currentIngress.length) {
+        const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
+        const nonCatchAll = filtered.filter((r) => r.hostname)
+        const updatedIngress = [...nonCatchAll, catchAll]
+
+        await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
+          tunnelId,
+          {
+            account_id: this.cfg.accountId,
+            config: {
+              ...existing?.config,
+              ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
+            },
+          }
+        )
+        ingressRemoved = true
+      }
+    } catch (err) {
+      throw new Error(`Failed to remove tunnel ingress rule: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 2. Delete DNS CNAME Record
+    if (deleteDns) {
+      try {
+        let targetZoneId = params.zoneId
+        if (!targetZoneId) {
+          const zones = await this.listZones()
+          const matched = zones
+            .filter((z) => hostname === z.name || hostname.endsWith(`.${z.name}`))
+            .sort((a, b) => b.name.length - a.name.length)[0]
+          if (matched) {
+            targetZoneId = matched.id
+          }
+        }
+
+        if (targetZoneId) {
+          const cnameTarget = `${tunnelId}.cfargotunnel.com`
+          for await (const r of this.client.dns.records.list({
+            zone_id: targetZoneId,
+            type: 'CNAME',
+            name: { exact: hostname },
+          })) {
+            if (r.type === 'CNAME' && r.id && (!r.content || r.content === cnameTarget)) {
+              await this.client.dns.records.delete(r.id, { zone_id: targetZoneId })
+              dnsDeleted = true
+            }
+          }
+        }
+      } catch {
+        // DNS deletion is best effort
+      }
+    }
+
+    return { ok: true, ingressRemoved, dnsDeleted }
+  }
+
   async plan(): Promise<Change[]> {
     // v0.5 work. The plan engine lives in ../plan.ts and calls into providers;
     // this stub keeps the interface honest until then.

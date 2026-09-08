@@ -186,11 +186,29 @@ export default function App() {
     await window.core.invoke('account.remove', undefined)
     setConfigured(false)
     setAccountLabel(undefined)
+    setResources((prev) => prev.filter((r) => r.provider !== 'cloudflare'))
+    setOrphans([])
+    setTailLogs([])
+    setActiveTailScript(null)
     await refresh()
   }
 
-  async function handleStartQuickTunnel(targetUrl: string) {
-    const { tunnel } = await window.core.invoke('quickTunnel.start', { targetUrl })
+  async function handleStartQuickTunnel(
+    targetUrl: string,
+    options?: {
+      mode?: 'trycloudflare' | 'custom_domain'
+      customDomain?: {
+        tunnelId: string
+        hostname: string
+        zoneId?: string
+      }
+    },
+  ) {
+    const { tunnel } = await window.core.invoke('quickTunnel.start', {
+      targetUrl,
+      mode: options?.mode,
+      customDomain: options?.customDomain,
+    })
     setQuickTunnels((prev) => {
       const idx = prev.findIndex((t) => t.id === tunnel.id)
       if (idx >= 0) {
@@ -200,10 +218,14 @@ export default function App() {
       }
       return [...prev, tunnel]
     })
+    if (options?.mode === 'custom_domain') {
+      void refresh()
+    }
   }
 
   async function handleStopQuickTunnel(id: string) {
     await window.core.invoke('quickTunnel.stop', { id })
+    void refresh()
   }
 
   async function handleExposeContainer(originAddress: string) {
@@ -331,6 +353,8 @@ export default function App() {
             <QuickTunnelView
               quickTunnels={quickTunnels}
               containers={containers}
+              tunnels={tunnels}
+              configured={configured}
               logs={logs}
               busy={busy}
               error={error}
@@ -361,6 +385,7 @@ export default function App() {
               activeTailScript={activeTailScript}
               onStartTail={handleStartTail}
               onStopTail={handleStopTail}
+              onClearTailLogs={() => setTailLogs([])}
             />
           )}
           {view === 'bindings' && (
@@ -393,7 +418,11 @@ export default function App() {
         </main>
       </div>
 
-      <OnboardingModal open={showOnboarding} onConnected={handleConnected} />
+      <OnboardingModal
+        open={showOnboarding}
+        onConnected={handleConnected}
+        onClose={configured ? () => setShowOnboarding(false) : undefined}
+      />
       <ExposeContainerModal
         container={selectedContainerForExpose}
         tunnels={tunnels}

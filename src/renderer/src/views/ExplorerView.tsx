@@ -37,7 +37,7 @@ export function ExplorerView({
 
   // Wrangler dev launch modal / controls
   const [wranglerPath, setWranglerPath] = useState('')
-  const [wranglerPort] = useState('8787')
+  const [wranglerPort, setWranglerPort] = useState('8787')
   const [wranglerBusy, setWranglerBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -99,7 +99,8 @@ export function ExplorerView({
   }
 
   const filteredTraces = traces.filter((t) => {
-    if (methodFilter !== 'ALL' && t.method.toUpperCase() !== methodFilter) {
+    const traceMethod = (t.method || 'GET').toUpperCase()
+    if (methodFilter !== 'ALL' && traceMethod !== methodFilter) {
       return false
     }
     if (search) {
@@ -126,7 +127,10 @@ export function ExplorerView({
       >
         <div className="flex items-center gap-2">
           <button
-            onClick={onClearTraces}
+            onClick={() => {
+              setSelectedTrace(null)
+              onClearTraces()
+            }}
             className="rounded border border-border bg-surface px-3 py-1.5 type-body-sm font-medium text-ink hover:bg-surface-hover transition-colors"
           >
             Clear Traces
@@ -177,8 +181,19 @@ export function ExplorerView({
                   placeholder="Local project path (e.g. /path/to/worker)"
                   value={wranglerPath}
                   onChange={(e) => setWranglerPath(e.target.value)}
-                  className="rounded border border-border bg-surface px-2.5 py-1 type-code-xs text-ink w-64 focus:border-accent focus:outline-none"
+                  className="rounded border border-border bg-surface px-2.5 py-1 type-code-xs text-ink w-56 sm:w-64 focus:border-accent focus:outline-none"
                 />
+                <div className="flex items-center gap-1">
+                  <span className="type-code-xs text-ink-muted">:</span>
+                  <input
+                    type="number"
+                    placeholder="8787"
+                    value={wranglerPort}
+                    onChange={(e) => setWranglerPort(e.target.value)}
+                    className="rounded border border-border bg-surface px-2 py-1 type-code-xs text-ink w-16 focus:border-accent focus:outline-none"
+                    title="Wrangler Dev Port"
+                  />
+                </div>
                 <button
                   type="submit"
                   disabled={wranglerBusy || !wranglerPath.trim()}

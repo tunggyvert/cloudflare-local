@@ -142,7 +142,10 @@ export function PathTraceView({
         onRescan={onRescan}
       >
         <button
-          onClick={onClearTraces}
+          onClick={() => {
+            setSelectedId(null)
+            onClearTraces()
+          }}
           className="rounded border border-border bg-surface px-3 py-1.5 type-body-sm font-medium text-ink hover:bg-surface-hover transition-colors"
         >
           Clear Traces
