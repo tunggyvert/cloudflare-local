@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, dialog } from 'electron'
 import { join } from 'node:path'
-import { autoUpdater } from 'electron-updater'
+import electronUpdater from 'electron-updater'
+const { autoUpdater } = electronUpdater
 import { CoreClient } from './core-client'
 import { IPC_INVOKE, IPC_EVENT, type CoreMethod } from '../shared/protocol'
 
