@@ -7,7 +7,6 @@ import { EmptyRow, Table, TBody, Td, Th, THead, Tr } from '../components/Table'
 import {
   IconCheck,
   IconCopy,
-  IconPlay,
   IconSearch,
 } from '../icons'
 
@@ -35,11 +34,6 @@ export function ExplorerView({
     wranglerProject?: string
   } | null>(null)
 
-  // Wrangler dev launch modal / controls
-  const [wranglerPath, setWranglerPath] = useState('')
-  const [wranglerPort, setWranglerPort] = useState('8787')
-  const [wranglerBusy, setWranglerBusy] = useState(false)
-  const [localError, setLocalError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   async function loadStatus() {
@@ -56,37 +50,6 @@ export function ExplorerView({
     const timer = setInterval(() => void loadStatus(), 3000)
     return () => clearInterval(timer)
   }, [])
-
-  async function handleStartWrangler(e: React.FormEvent) {
-    e.preventDefault()
-    if (!wranglerPath.trim()) return
-
-    setWranglerBusy(true)
-    setLocalError(null)
-    try {
-      await window.core.invoke('explorer.wrangler.start', {
-        projectPath: wranglerPath.trim(),
-        port: parseInt(wranglerPort, 10) || 8787,
-      })
-      await loadStatus()
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setWranglerBusy(false)
-    }
-  }
-
-  async function handleStopWrangler() {
-    setWranglerBusy(true)
-    try {
-      await window.core.invoke('explorer.wrangler.stop', undefined)
-      await loadStatus()
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setWranglerBusy(false)
-    }
-  }
 
   async function handleCopy(text: string, id: string) {
     try {
@@ -139,9 +102,8 @@ export function ExplorerView({
       </PageHeader>
 
       {error && <ErrorBanner message={error} />}
-      {localError && <ErrorBanner message={localError} />}
 
-      {/* Trace Server & Wrangler Status Bar */}
+      {/* Trace Server Ingest Status Bar */}
       <div className="mb-6 rounded border border-border bg-surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -159,51 +121,10 @@ export function ExplorerView({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {statusInfo?.wranglerDevRunning ? (
-              <div className="flex items-center gap-2 rounded bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5">
-                <StatusDot tone="healthy" />
-                <span className="type-body-sm font-medium text-emerald-700">
-                  wrangler dev running: <span className="font-mono">{statusInfo.wranglerProject}</span>
-                </span>
-                <button
-                  onClick={() => void handleStopWrangler()}
-                  disabled={wranglerBusy}
-                  className="ml-2 rounded bg-red-600 px-2 py-0.5 type-code-xs font-medium text-white hover:bg-red-700"
-                >
-                  Stop
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleStartWrangler} className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Local project path (e.g. /path/to/worker)"
-                  value={wranglerPath}
-                  onChange={(e) => setWranglerPath(e.target.value)}
-                  className="rounded border border-border bg-surface px-2.5 py-1 type-code-xs text-ink w-56 sm:w-64 focus:border-accent focus:outline-none"
-                />
-                <div className="flex items-center gap-1">
-                  <span className="type-code-xs text-ink-muted">:</span>
-                  <input
-                    type="number"
-                    placeholder="8787"
-                    value={wranglerPort}
-                    onChange={(e) => setWranglerPort(e.target.value)}
-                    className="rounded border border-border bg-surface px-2 py-1 type-code-xs text-ink w-16 focus:border-accent focus:outline-none"
-                    title="Wrangler Dev Port"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={wranglerBusy || !wranglerPath.trim()}
-                  className="flex items-center gap-1 rounded bg-accent px-3 py-1 type-body-sm font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-                >
-                  <IconPlay className="h-3.5 w-3.5" />
-                  Run Wrangler
-                </button>
-              </form>
-            )}
+          <div className="flex items-center gap-2">
+            <span className="type-code-xs font-mono rounded bg-surface-subtle border border-border px-2.5 py-1 text-ink-secondary">
+              {statusInfo?.running ? 'Ingest active' : 'Ingest idle'}
+            </span>
           </div>
         </div>
       </div>

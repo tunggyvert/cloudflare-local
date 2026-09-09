@@ -37,12 +37,14 @@ export function Sidebar({
   mobileOpen,
   onCloseMobile,
   accountBadge,
+  version,
 }: {
   view: View
   onNavigate: (v: View) => void
   mobileOpen: boolean
   onCloseMobile: () => void
   accountBadge?: React.ReactNode
+  version?: string
 }) {
   return (
     <>
@@ -61,7 +63,11 @@ export function Sidebar({
         <div className="flex items-center justify-between border-b border-border px-4 py-4 md:justify-center md:px-2 lg:justify-between lg:px-4">
           <div className="md:hidden lg:block">
             <p className="type-headline-sm text-ink">cloudflare-local</p>
-            <p className="type-body-sm mt-0.5 text-ink-muted">v0.1 — tunnels, DNS, clean teardown</p>
+            {version ? (
+              <p className="type-body-sm mt-0.5 text-ink-muted">v{version}</p>
+            ) : (
+              <p className="type-body-sm mt-0.5 text-ink-muted">Local Cloudflare Manager</p>
+            )}
           </div>
           <div
             aria-hidden

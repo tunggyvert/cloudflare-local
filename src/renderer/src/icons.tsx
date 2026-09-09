@@ -266,3 +266,13 @@ export function IconFilter(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconTag(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M2.5 8.5 8.5 2.5H13.5V7.5L7.5 13.5L2.5 8.5Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="10.5" cy="5.5" r="0.75" />
+    </Icon>
+  )
+}
+
+

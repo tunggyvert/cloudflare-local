@@ -650,7 +650,7 @@ export function QuickTunnelView({
                     </span>
                   )}
                   {t.tunnelType === 'custom_domain' && (
-                    <span className="rounded bg-accent/10 px-1.5 py-0.2 type-code-sm text-[10px] text-accent-strong">
+                    <span className="rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] text-accent-strong">
                       domain
                     </span>
                   )}

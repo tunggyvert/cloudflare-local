@@ -170,8 +170,10 @@ export function PathTraceView({
           <div className="type-code-xs text-ink-muted">
             Nginx access logs:{' '}
             {status && status.nginxAccessLogs.length > 0
-              ? status.nginxAccessLogs.map((l) => l.hostname ?? l.path.split('/').pop()).join(', ')
-              : 'none watched'}
+              ? (status.nginxAccessLogs.some((l) => l.hostname)
+                  ? status.nginxAccessLogs.map((l) => l.hostname).filter(Boolean).join(', ')
+                  : `${status.nginxAccessLogs.length} active`)
+              : 'none'}
           </div>
           <div className="type-code-xs text-ink-muted">
             Containers tracked: {status?.containersTracked.length ?? 0}
