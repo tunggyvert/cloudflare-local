@@ -79,6 +79,18 @@ export function WorkersView({
     }
   }, [tailLogs, autoScroll])
 
+  // Escape key handler for deploy modal
+  useEffect(() => {
+    if (!deployModalOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setDeployModalOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [deployModalOpen])
+
   async function handleDeploy(e: React.FormEvent) {
     e.preventDefault()
     if (!deployName.trim() || !deployCode.trim()) return
@@ -504,8 +516,15 @@ export function WorkersView({
 
       {/* Deploy Worker Modal */}
       {deployModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4">
-          <div className="w-full max-w-2xl rounded border border-border bg-surface p-6 shadow-xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 backdrop-blur-xs p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setDeployModalOpen(false)
+            }
+          }}
+        >
+          <div className="w-full max-w-2xl rounded border border-border bg-surface p-6 shadow-md">
             <div className="flex items-center justify-between border-b border-border pb-3 mb-4">
               <div className="flex items-center gap-2">
                 <IconCode className="h-5 w-5 text-accent-strong" />
