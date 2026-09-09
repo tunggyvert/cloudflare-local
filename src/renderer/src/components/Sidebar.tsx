@@ -108,7 +108,7 @@ export function Sidebar({
         </nav>
 
         {accountBadge && (
-          <div className="border-t border-border p-2 md:hidden lg:block">
+          <div className="border-t border-border p-2">
             {accountBadge}
           </div>
         )}

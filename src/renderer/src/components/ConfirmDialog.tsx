@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -24,11 +24,29 @@ export function ConfirmDialog({
   onConfirm,
   onCancel
 }: ConfirmDialogProps) {
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCancel()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, onCancel])
+
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40">
-      <div className="w-full max-w-lg bg-surface border border-border rounded shadow-sm flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 backdrop-blur-xs p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onCancel()
+        }
+      }}
+    >
+      <div className="w-full max-w-lg bg-surface border border-border rounded shadow-md flex flex-col">
         <div className="p-4 border-b border-border">
           <h2 className="type-headline-sm text-ink">{title}</h2>
           {description && (

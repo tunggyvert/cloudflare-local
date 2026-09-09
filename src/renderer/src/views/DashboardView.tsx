@@ -75,14 +75,14 @@ export function DashboardView({
     }
   }
 
-  const summary: { view: View; icon: typeof IconContainer; label: string; total: number; detail: string }[] = [
+  const summary: { view: View; icon: typeof IconContainer; label: string; total: number | string; detail: string }[] = [
     { view: 'trace', icon: IconPathTrace, label: 'Path Trace', total: pathTracesCount, detail: 'edge → worker → tunnel → nginx → container' },
     { view: 'quick-tunnel', icon: IconBolt, label: 'Quick Tunnel', total: activeQuick.length, detail: activeQuick.length > 0 ? `${activeQuick.length} active` : 'expose local port' },
     { view: 'containers', icon: IconContainer, label: 'Containers', total: containers.length, detail: `${running} running` },
     { view: 'tunnels', icon: IconTunnel, label: 'Tunnels', total: tunnels.length, detail: `${tunnels.length} discovered` },
     { view: 'dns', icon: IconDns, label: 'DNS Records', total: dnsRecords.length, detail: `${dnsRecords.length} tunnel CNAMEs` },
     { view: 'workers', icon: IconWorker, label: 'Workers', total: workers.length, detail: `${workers.length} scripts deployed` },
-    { view: 'bindings', icon: IconStorage, label: 'Storage', total: configured ? 3 : 0, detail: 'KV, R2, D1 browser' },
+    { view: 'bindings', icon: IconStorage, label: 'Storage', total: configured ? 'Enabled' : '—', detail: 'KV, R2, D1 browser' },
     { view: 'explorer', icon: IconExplorer, label: 'Explorer', total: tracesCount, detail: 'live request traces' },
     { view: 'nginx', icon: IconServer, label: 'Nginx', total: nginxServers.length, detail: `${nginxServers.length} server blocks` },
     { view: 'orphans', icon: IconOrphan, label: 'Orphans', total: orphans.length, detail: `${certain} certain, ${likely} likely` },

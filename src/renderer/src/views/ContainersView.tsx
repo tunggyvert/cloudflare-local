@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import type { Resource } from '../../../shared/model'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { PageHeader } from '../components/PageHeader'
 import { StatusDot, StatusPill, toneFromText } from '../components/Status'
 import { EmptyRow, TBody, THead, Table, Td, Th, Tr } from '../components/Table'
-import { IconBolt, IconLink, IconTag } from '../icons'
+import { IconBolt, IconLink, IconSearch, IconTag } from '../icons'
 
 export function ContainersView({
   containers,
@@ -20,6 +21,18 @@ export function ContainersView({
   onStartQuickTunnel?: (url: string) => void
   onExposeContainer?: (container: Resource) => void
 }) {
+  const [search, setSearch] = useState('')
+
+  const filteredContainers = containers.filter((c) => {
+    if (!search) return true
+    const q = search.toLowerCase()
+    const name = c.name.toLowerCase()
+    const state = (c.meta?.state || '').toLowerCase()
+    const address = (c.origins?.[0]?.address || '').toLowerCase()
+    const labelHostname = (c.meta?.['dockflare_hostname'] || c.meta?.['cloudflare.hostname'] || '').toLowerCase()
+    return name.includes(q) || state.includes(q) || address.includes(q) || labelHostname.includes(q)
+  })
+
   return (
     <div>
       <PageHeader
@@ -29,6 +42,22 @@ export function ContainersView({
         onRescan={onRescan}
       />
       {error && <ErrorBanner message={error} />}
+
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-sm">
+          <IconSearch className="absolute left-2.5 top-2.5 h-4 w-4 text-ink-muted" />
+          <input
+            type="text"
+            placeholder="Filter containers by name, origin, state…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded border border-border bg-surface py-1.5 pl-8 pr-3 type-body-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+        <span className="type-body-sm text-ink-muted">
+          {filteredContainers.length} container{filteredContainers.length === 1 ? '' : 's'}
+        </span>
+      </div>
 
       <Table>
         <THead>
@@ -40,7 +69,7 @@ export function ContainersView({
           </tr>
         </THead>
         <TBody>
-          {containers.map((c) => {
+          {filteredContainers.map((c) => {
             const state = c.meta?.state
             const tone = toneFromText(state)
             const originAddress = c.origins?.[0]?.address
@@ -102,8 +131,12 @@ export function ContainersView({
               </Tr>
             )
           })}
-          {containers.length === 0 && (
-            <EmptyRow colSpan={4}>No containers found. Is Docker running?</EmptyRow>
+          {filteredContainers.length === 0 && (
+            <EmptyRow colSpan={4}>
+              {containers.length === 0
+                ? 'No containers found. Is Docker running?'
+                : 'No containers match your filter.'}
+            </EmptyRow>
           )}
         </TBody>
       </Table>
