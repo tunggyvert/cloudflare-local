@@ -36,10 +36,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Account state
+  // Account & app state
   const [configured, setConfigured] = useState<boolean | null>(null) // null = loading
   const [accountLabel, setAccountLabel] = useState<string | undefined>()
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [appVersion, setAppVersion] = useState<string>('')
 
   // Container expose modal state
   const [exposeModalOpen, setExposeModalOpen] = useState(false)
@@ -135,7 +136,13 @@ export default function App() {
 
   async function checkAccount() {
     try {
-      const status = await window.core.invoke('account.status', undefined)
+      const [status, healthRes] = await Promise.all([
+        window.core.invoke('account.status', undefined),
+        window.core.invoke('health', undefined).catch(() => ({ ok: true as const, version: '' })),
+      ])
+      if (healthRes.version) {
+        setAppVersion(healthRes.version)
+      }
       setConfigured(status.configured)
       setAccountLabel(status.label)
       if (!status.configured) {
@@ -297,6 +304,7 @@ export default function App() {
         onNavigate={navigate}
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
+        version={appVersion}
         accountBadge={
           <AccountBadge
             configured={configured}

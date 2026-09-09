@@ -3,7 +3,7 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { PageHeader } from '../components/PageHeader'
 import { StatusDot, StatusPill, toneFromText } from '../components/Status'
 import { EmptyRow, TBody, THead, Table, Td, Th, Tr } from '../components/Table'
-import { IconBolt, IconLink } from '../icons'
+import { IconBolt, IconLink, IconTag } from '../icons'
 
 export function ContainersView({
   containers,
@@ -59,7 +59,7 @@ export function ContainersView({
                         className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] font-medium text-accent-strong"
                         title={`DockFlare label configuration: ${labelHostname}${labelTunnel ? ` (Tunnel: ${labelTunnel})` : ''}`}
                       >
-                        <span>🏷️</span>
+                        <IconTag className="h-3 w-3" />
                         <span>{labelHostname}</span>
                       </span>
                     )}
