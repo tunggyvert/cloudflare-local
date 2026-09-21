@@ -14,7 +14,7 @@ import { CloudflareProvider } from './providers/cloudflare'
 import { NginxProvider } from './providers/nginx'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
-import { getAugmentedPath } from './supervisor/binary'
+import { getAugmentedPath } from './supervisor/binary.ts'
 import { QuickTunnelManager } from './quick-tunnel'
 
 // Ensure system/package-manager paths (Homebrew, MacPorts, WinGet, etc.) are available

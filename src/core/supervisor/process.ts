@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { getAugmentedPath, getInstallHint, resolveBinary } from './binary'
+import { getAugmentedPath, getInstallHint, resolveBinary } from './binary.ts'
 
 export type ProcessState = 'starting' | 'running' | 'stopped' | 'crashed'
 
