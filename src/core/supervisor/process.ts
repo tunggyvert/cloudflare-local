@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { getAugmentedPath, getInstallHint, resolveBinary } from './binary'
 
 export type ProcessState = 'starting' | 'running' | 'stopped' | 'crashed'
 
@@ -45,9 +46,16 @@ export class SupervisedProcess extends EventEmitter {
     this.stopping = false
     this.setState('starting')
 
-    const child = spawn(this.opts.command, this.opts.args, {
+    const resolvedCommand = resolveBinary(this.opts.command)
+    const augmentedEnv = {
+      ...process.env,
+      PATH: getAugmentedPath(),
+      ...this.opts.env,
+    }
+
+    const child = spawn(resolvedCommand, this.opts.args, {
       cwd: this.opts.cwd,
-      env: { ...process.env, ...this.opts.env },
+      env: augmentedEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child
@@ -60,9 +68,14 @@ export class SupervisedProcess extends EventEmitter {
       this.setState('running')
     })
 
-    child.on('error', (err) => {
+    child.on('error', (err: NodeJS.ErrnoException) => {
       this.child = undefined
-      this.setState('crashed', err.message)
+      let detail = err.message
+      if (err.code === 'ENOENT') {
+        const hint = getInstallHint(this.opts.command)
+        detail = `Executable '${this.opts.command}' was not found. ${hint}`
+      }
+      this.setState('crashed', detail)
     })
 
     child.on('exit', (code, signal) => {

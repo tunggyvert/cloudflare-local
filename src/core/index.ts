@@ -14,7 +14,11 @@ import { CloudflareProvider } from './providers/cloudflare'
 import { NginxProvider } from './providers/nginx'
 import { detectOrphans } from './orphans'
 import { Supervisor } from './supervisor/process'
+import { getAugmentedPath } from './supervisor/binary'
 import { QuickTunnelManager } from './quick-tunnel'
+
+// Ensure system/package-manager paths (Homebrew, MacPorts, WinGet, etc.) are available
+process.env.PATH = getAugmentedPath()
 import { LocalCacheStore } from './cache/store'
 import { WorkerTailManager } from './workers/tail'
 import { LocalExplorerManager } from './explorer/manager'

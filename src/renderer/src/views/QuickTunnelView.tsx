@@ -639,33 +639,40 @@ export function QuickTunnelView({
             {pastTunnels.slice(-5).map((t) => (
               <div
                 key={t.id}
-                className="flex items-center justify-between rounded border border-border bg-surface px-4 py-2 text-sm text-ink-secondary"
+                className="rounded border border-border bg-surface px-4 py-2.5 text-sm text-ink-secondary space-y-1.5"
               >
-                <div className="flex items-center gap-2">
-                  <StatusDot tone={t.status === 'crashed' ? 'critical' : 'neutral'} />
-                  <span className="font-mono text-ink">{t.targetUrl}</span>
-                  {t.publicUrl && (
-                    <span className="font-mono text-xs text-ink-muted truncate max-w-xs">
-                      ({t.publicUrl})
-                    </span>
-                  )}
-                  {t.tunnelType === 'custom_domain' && (
-                    <span className="rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] text-accent-strong">
-                      domain
-                    </span>
-                  )}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <StatusDot tone={t.status === 'crashed' ? 'critical' : 'neutral'} />
+                    <span className="font-mono text-ink">{t.targetUrl}</span>
+                    {t.publicUrl && (
+                      <span className="font-mono text-xs text-ink-muted truncate max-w-xs">
+                        ({t.publicUrl})
+                      </span>
+                    )}
+                    {t.tunnelType === 'custom_domain' && (
+                      <span className="rounded bg-accent/10 px-1.5 py-0.5 type-code-sm text-[10px] text-accent-strong">
+                        domain
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <StatusPill tone={t.status === 'crashed' ? 'critical' : 'neutral'}>
+                      {t.status}
+                    </StatusPill>
+                    <button
+                      onClick={() => void handleRelaunch(t)}
+                      className="type-body-sm text-accent-strong hover:underline"
+                    >
+                      Relaunch
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <StatusPill tone={t.status === 'crashed' ? 'critical' : 'neutral'}>
-                    {t.status}
-                  </StatusPill>
-                  <button
-                    onClick={() => void handleRelaunch(t)}
-                    className="type-body-sm text-accent-strong hover:underline"
-                  >
-                    Relaunch
-                  </button>
-                </div>
+                {t.error && (
+                  <div className="rounded bg-red-500/10 px-2 py-1 text-xs text-red-600 dark:text-red-400 font-mono break-all">
+                    {t.error}
+                  </div>
+                )}
               </div>
             ))}
           </div>

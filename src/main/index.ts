@@ -5,6 +5,16 @@ const { autoUpdater } = electronUpdater
 import { CoreClient } from './core-client'
 import { IPC_INVOKE, IPC_EVENT, type CoreMethod } from '../shared/protocol'
 
+// Ensure standard Homebrew & system bin paths exist in macOS GUI apps
+if (process.platform === 'darwin') {
+  const extra = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin']
+  const cur = (process.env.PATH || '').split(':')
+  for (const p of extra) {
+    if (!cur.includes(p)) cur.unshift(p)
+  }
+  process.env.PATH = cur.join(':')
+}
+
 const core = new CoreClient()
 let win: BrowserWindow | null = null
 let tray: Tray | null = null

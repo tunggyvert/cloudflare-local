@@ -38,6 +38,7 @@ export class QuickTunnelManager extends EventEmitter {
   private getCloudflare?: () => CloudflareProvider | null
   private cache?: LocalCacheStore
   private tunnels = new Map<string, QuickTunnel>()
+  private startTimers = new Map<string, NodeJS.Timeout>()
 
   constructor(
     supervisor: Supervisor,
@@ -51,7 +52,7 @@ export class QuickTunnelManager extends EventEmitter {
 
     this.loadPersisted()
 
-    // Intercept logs to extract the generated trycloudflare.com URL
+    // Intercept logs to extract the generated trycloudflare.com URL or detect early errors
     this.supervisor.on('log', ({ source, line }) => {
       if (!source.startsWith('quick:')) return
       const id = source.replace(/^quick:/, '')
@@ -60,10 +61,36 @@ export class QuickTunnelManager extends EventEmitter {
 
       const match = line.match(TRYCLOUDFLARE_REGEX)
       if (match && (!tunnel.publicUrl || tunnel.status !== 'running')) {
+        this.clearStartTimeout(id)
         tunnel.publicUrl = match[0]
         tunnel.status = 'running'
+        tunnel.error = undefined
         this.emit('update', tunnel)
         this.persist()
+        return
+      }
+
+      // Check for TryCloudflare rate limiting (HTTP 429) or registration failure
+      if (tunnel.status === 'starting' && !tunnel.publicUrl) {
+        const lower = line.toLowerCase()
+        if (line.includes('429') || lower.includes('too many requests')) {
+          this.clearStartTimeout(id)
+          tunnel.status = 'crashed'
+          tunnel.error =
+            'TryCloudflare rate limit reached (HTTP 429: Too Many Requests). Cloudflare limits free tunnels per IP. Please wait a few minutes or use a Custom Domain tunnel.'
+          this.emit('update', tunnel)
+          this.persist()
+        } else if (
+          lower.includes('failed to request quick tunnel') ||
+          lower.includes('failed to create new tunnel') ||
+          lower.includes('unable to create quick tunnel')
+        ) {
+          this.clearStartTimeout(id)
+          tunnel.status = 'crashed'
+          tunnel.error = `TryCloudflare initialization error: ${line.trim()}`
+          this.emit('update', tunnel)
+          this.persist()
+        }
       }
     })
 
@@ -75,11 +102,13 @@ export class QuickTunnelManager extends EventEmitter {
       if (!tunnel) return
 
       if (state === 'crashed') {
+        this.clearStartTimeout(id)
         tunnel.status = 'crashed'
         tunnel.error = detail || 'cloudflared exited unexpectedly'
         this.emit('update', tunnel)
         this.persist()
       } else if (state === 'stopped') {
+        this.clearStartTimeout(id)
         tunnel.status = 'stopped'
         this.emit('update', tunnel)
         this.persist()
@@ -89,6 +118,14 @@ export class QuickTunnelManager extends EventEmitter {
         this.emit('update', tunnel)
       }
     })
+  }
+
+  private clearStartTimeout(id: string): void {
+    const timer = this.startTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      this.startTimers.delete(id)
+    }
   }
 
   private loadPersisted(): void {
@@ -200,12 +237,28 @@ export class QuickTunnelManager extends EventEmitter {
       restart: false,
     })
 
+    // Timeout after 40 seconds if TryCloudflare doesn't return a public URL
+    this.clearStartTimeout(id)
+    const timeoutTimer = setTimeout(() => {
+      const current = this.tunnels.get(id)
+      if (current && current.status === 'starting' && !current.publicUrl) {
+        current.status = 'crashed'
+        current.error =
+          'TryCloudflare timed out after 40 seconds. Cloudflare Edge may be rate limiting this IP or the connection was blocked. Consider using Custom Domain or trying again later.'
+        this.emit('update', current)
+        this.persist()
+        void this.supervisor.stop(procId)
+      }
+    }, 40_000)
+    this.startTimers.set(id, timeoutTimer)
+
     this.emit('update', tunnel)
     this.persist()
     return tunnel
   }
 
   async stop(id: string): Promise<boolean> {
+    this.clearStartTimeout(id)
     const tunnel = this.tunnels.get(id)
     if (!tunnel) return false
 

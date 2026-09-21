@@ -37,6 +37,51 @@ export class CloudflareProvider implements Provider {
 
   private client: Cloudflare
   private cfg: CloudflareConfig
+  private tunnelConfigQueue = new Map<string, Promise<unknown>>()
+
+  /**
+   * Serializes updates to the same tunnel's configuration and retries with
+   * exponential backoff if Cloudflare responds with HTTP 429 / Code 971 (Throttled).
+   */
+  private async withTunnelConfigUpdate<T>(tunnelId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.tunnelConfigQueue.get(tunnelId) ?? Promise.resolve()
+    const run = prev
+      .catch(() => {})
+      .then(async () => {
+        const maxRetries = 3
+        let delayMs = 3000
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            return await fn()
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err)
+            const isRateLimit =
+              msg.includes('429') ||
+              msg.includes('971') ||
+              msg.toLowerCase().includes('throttl') ||
+              (typeof err === 'object' && err !== null && 'status' in err && (err as { status?: number }).status === 429)
+
+            if (isRateLimit && attempt < maxRetries) {
+              await new Promise((resolve) => setTimeout(resolve, delayMs))
+              delayMs *= 2
+              continue
+            }
+
+            if (isRateLimit) {
+              throw new Error(
+                'Cloudflare Zero Trust rate limit reached (HTTP 429: Code 971). Cloudflare requires a cooldown between tunnel configuration updates. Please wait 1-2 minutes before modifying tunnel routes.'
+              )
+            }
+            throw err
+          }
+        }
+        throw new Error('Tunnel configuration update failed after retries')
+      })
+
+    this.tunnelConfigQueue.set(tunnelId, run)
+    return run as Promise<T>
+  }
 
   constructor(cfg: CloudflareConfig) {
     this.cfg = cfg
@@ -646,43 +691,45 @@ export class CloudflareProvider implements Provider {
 
     // 1. Ingress Rule in Tunnel Configuration
     try {
-      const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
-        tunnelId,
-        { account_id: this.cfg.accountId }
-      )
-      const currentIngress = (existing?.config?.ingress ?? []) as Array<{
-        hostname?: string
-        path?: string
-        service: string
-      }>
+      await this.withTunnelConfigUpdate(tunnelId, async () => {
+        const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
+          tunnelId,
+          { account_id: this.cfg.accountId }
+        )
+        const currentIngress = (existing?.config?.ingress ?? []) as Array<{
+          hostname?: string
+          path?: string
+          service: string
+        }>
 
-      // Remove existing rule for this hostname/path if already present to update it
-      const filtered = currentIngress.filter(
-        (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
-      )
+        // Remove existing rule for this hostname/path if already present to update it
+        const filtered = currentIngress.filter(
+          (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
+        )
 
-      // Ensure the 404 catch-all is at the end, or create one if none exists
-      const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
-      const nonCatchAll = filtered.filter((r) => r.hostname)
+        // Ensure the 404 catch-all is at the end, or create one if none exists
+        const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
+        const nonCatchAll = filtered.filter((r) => r.hostname)
 
-      const newRule: { hostname: string; service: string; path?: string } = {
-        hostname,
-        service,
-      }
-      if (path) newRule.path = path
-
-      const updatedIngress = [...nonCatchAll, newRule, catchAll]
-
-      await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
-        tunnelId,
-        {
-          account_id: this.cfg.accountId,
-          config: {
-            ...existing?.config,
-            ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
-          },
+        const newRule: { hostname: string; service: string; path?: string } = {
+          hostname,
+          service,
         }
-      )
+        if (path) newRule.path = path
+
+        const updatedIngress = [...nonCatchAll, newRule, catchAll]
+
+        await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
+          tunnelId,
+          {
+            account_id: this.cfg.accountId,
+            config: {
+              ...existing?.config,
+              ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
+            },
+          }
+        )
+      })
       ingressAdded = true
     } catch (err) {
       throw new Error(`Failed to update tunnel ingress configuration: ${err instanceof Error ? err.message : String(err)}`)
@@ -766,37 +813,39 @@ export class CloudflareProvider implements Provider {
 
     // 1. Remove from tunnel ingress
     try {
-      const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
-        tunnelId,
-        { account_id: this.cfg.accountId }
-      )
-      const currentIngress = (existing?.config?.ingress ?? []) as Array<{
-        hostname?: string
-        path?: string
-        service: string
-      }>
-
-      const filtered = currentIngress.filter(
-        (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
-      )
-
-      if (filtered.length !== currentIngress.length) {
-        const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
-        const nonCatchAll = filtered.filter((r) => r.hostname)
-        const updatedIngress = [...nonCatchAll, catchAll]
-
-        await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
+      await this.withTunnelConfigUpdate(tunnelId, async () => {
+        const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
           tunnelId,
-          {
-            account_id: this.cfg.accountId,
-            config: {
-              ...existing?.config,
-              ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
-            },
-          }
+          { account_id: this.cfg.accountId }
         )
-        ingressRemoved = true
-      }
+        const currentIngress = (existing?.config?.ingress ?? []) as Array<{
+          hostname?: string
+          path?: string
+          service: string
+        }>
+
+        const filtered = currentIngress.filter(
+          (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
+        )
+
+        if (filtered.length !== currentIngress.length) {
+          const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
+          const nonCatchAll = filtered.filter((r) => r.hostname)
+          const updatedIngress = [...nonCatchAll, catchAll]
+
+          await this.client.zeroTrust.tunnels.cloudflared.configurations.update(
+            tunnelId,
+            {
+              account_id: this.cfg.accountId,
+              config: {
+                ...existing?.config,
+                ingress: updatedIngress as unknown as Array<{ hostname: string; service: string; path?: string }>,
+              },
+            }
+          )
+          ingressRemoved = true
+        }
+      })
     } catch (err) {
       throw new Error(`Failed to remove tunnel ingress rule: ${err instanceof Error ? err.message : String(err)}`)
     }
