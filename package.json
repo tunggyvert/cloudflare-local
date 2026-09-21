@@ -1,6 +1,6 @@
 {
   "name": "cloudflare-local",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A local-first manager for Cloudflare Tunnels and their origins",
   "private": true,
   "license": "MIT",

@@ -31,7 +31,7 @@ import type { Provider } from './providers/types'
 import type { Resource, Service, PathTraceHop } from '../shared/model'
 import type { CoreMessage, RpcRequest, RpcResponse, RpcEvent } from '../shared/protocol'
 
-const VERSION = '0.4.0'
+const VERSION = '0.4.1'
 
 const supervisor = new Supervisor()
 const docker = new DockerProvider()
