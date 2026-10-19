@@ -688,6 +688,7 @@ export class CloudflareProvider implements Provider {
 
     let ingressAdded = false
     let dnsCreated = false
+    let previousRule: { hostname?: string; path?: string; service: string } | undefined
 
     // 1. Ingress Rule in Tunnel Configuration
     try {
@@ -701,6 +702,10 @@ export class CloudflareProvider implements Provider {
           path?: string
           service: string
         }>
+
+        previousRule = currentIngress.find(
+          (rule) => rule.hostname === hostname && (rule.path || undefined) === (path || undefined)
+        )
 
         // Remove existing rule for this hostname/path if already present to update it
         const filtered = currentIngress.filter(
@@ -786,10 +791,63 @@ export class CloudflareProvider implements Provider {
         dnsCreated = true
       }
     } catch (err) {
-      throw new Error(`Ingress configured, but DNS record update failed: ${err instanceof Error ? err.message : String(err)}`)
+      const reason = err instanceof Error ? err.message : String(err)
+      // Don't leave a half-applied expose behind: put the ingress back the way it was.
+      try {
+        await this.restoreIngressRule(tunnelId, hostname, path, previousRule)
+      } catch (rollbackErr) {
+        throw new Error(
+          `DNS record update failed (${reason}) and the ingress rollback also failed: ${
+            rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)
+          }`
+        )
+      }
+      throw new Error(`DNS record update failed, ingress change was rolled back: ${reason}`)
     }
 
     return { ok: true, ingressAdded, dnsCreated, hostname }
+  }
+
+  /** Replaces the ingress rule for hostname/path with `previous`, or removes it when there was none. */
+  private async restoreIngressRule(
+    tunnelId: string,
+    hostname: string,
+    path: string | undefined,
+    previous: { hostname?: string; path?: string; service: string } | undefined
+  ): Promise<void> {
+    await this.withTunnelConfigUpdate(tunnelId, async () => {
+      const existing = await this.client.zeroTrust.tunnels.cloudflared.configurations.get(
+        tunnelId,
+        { account_id: this.cfg.accountId }
+      )
+      const current = (existing?.config?.ingress ?? []) as Array<{
+        hostname?: string
+        path?: string
+        service: string
+      }>
+      const filtered = current.filter(
+        (rule) => !(rule.hostname === hostname && (rule.path || undefined) === (path || undefined))
+      )
+      const catchAll = filtered.find((r) => !r.hostname) ?? { service: 'http_status:404' }
+      const nonCatchAll = filtered.filter((r) => r.hostname)
+      const restored = previous ? [...nonCatchAll, previous, catchAll] : [...nonCatchAll, catchAll]
+
+      await this.client.zeroTrust.tunnels.cloudflared.configurations.update(tunnelId, {
+        account_id: this.cfg.accountId,
+        config: {
+          ...existing?.config,
+          ingress: restored as unknown as Array<{ hostname: string; service: string; path?: string }>,
+        },
+      })
+    })
+  }
+
+  /** Number of cloudflared connections currently registered with the tunnel at the edge. */
+  async tunnelConnectionCount(tunnelId: string): Promise<number> {
+    const t = await this.client.zeroTrust.tunnels.cloudflared.get(tunnelId, {
+      account_id: this.cfg.accountId,
+    })
+    return t?.connections?.length ?? 0
   }
 
   /**

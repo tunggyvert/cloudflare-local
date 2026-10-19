@@ -23,6 +23,12 @@ export function normalizeTargetUrl(input: string): string {
   return trimmed
 }
 
+const CONNECTOR_POLL_MS = 3_000
+const CONNECTOR_WAIT_MS = 60_000
+const NO_CONNECTOR_WAITING = 'Hostname configured; waiting for a cloudflared connector to attach to this tunnel…'
+const NO_CONNECTOR_TIMEOUT =
+  'Hostname is configured but no cloudflared connector is attached to this tunnel, so the edge returns 530. Start cloudflared for this tunnel, or Stop to tear the hostname down.'
+
 export interface QuickTunnelStartOptions {
   customId?: string
   mode?: 'trycloudflare' | 'custom_domain'
@@ -120,6 +126,45 @@ export class QuickTunnelManager extends EventEmitter {
     })
   }
 
+  private sharesRoute(a: QuickTunnel, b: QuickTunnel): boolean {
+    return (
+      a.tunnelType === 'custom_domain' &&
+      b.tunnelType === 'custom_domain' &&
+      a.tunnelId === b.tunnelId &&
+      a.hostname === b.hostname
+    )
+  }
+
+  /** Polls the edge until a connector registers, then flips the row to running; gives up after CONNECTOR_WAIT_MS. */
+  private watchForConnector(tunnel: QuickTunnel, cloudflare: CloudflareProvider): void {
+    const deadline = Date.now() + CONNECTOR_WAIT_MS
+    this.clearStartTimeout(tunnel.id)
+    const tick = async (): Promise<void> => {
+      if (this.tunnels.get(tunnel.id) !== tunnel || tunnel.status !== 'starting') return
+      let connections = 0
+      try {
+        connections = await cloudflare.tunnelConnectionCount(tunnel.tunnelId!)
+      } catch {
+        // transient API error: retry until the deadline
+      }
+      if (this.tunnels.get(tunnel.id) !== tunnel || tunnel.status !== 'starting') return
+      if (connections > 0) {
+        tunnel.status = 'running'
+        tunnel.error = undefined
+      } else if (Date.now() >= deadline) {
+        tunnel.status = 'crashed'
+        tunnel.error = NO_CONNECTOR_TIMEOUT
+      } else {
+        this.startTimers.set(tunnel.id, setTimeout(() => void tick(), CONNECTOR_POLL_MS))
+        return
+      }
+      this.startTimers.delete(tunnel.id)
+      this.emit('update', tunnel)
+      this.persist()
+    }
+    this.startTimers.set(tunnel.id, setTimeout(() => void tick(), CONNECTOR_POLL_MS))
+  }
+
   private clearStartTimeout(id: string): void {
     const timer = this.startTimers.get(id)
     if (timer) {
@@ -138,6 +183,10 @@ export class QuickTunnelManager extends EventEmitter {
         // If app restarted while TryCloudflare was running, process died with app
         if (t.tunnelType !== 'custom_domain' && (t.status === 'starting' || t.status === 'running')) {
           t.status = 'stopped'
+        }
+        if (t.tunnelType === 'custom_domain' && t.status === 'starting') {
+          t.status = 'crashed'
+          t.error = 'App restarted before the hostname finished starting. Stop it to tear down, then start again.'
         }
         this.tunnels.set(t.id, t)
       }
@@ -187,6 +236,14 @@ export class QuickTunnelManager extends EventEmitter {
         tunnelId,
         zoneId,
       }
+      // A hostname maps to exactly one ingress rule, so a new row for the same
+      // tunnel+hostname supersedes older ones instead of coexisting with them.
+      for (const other of this.tunnels.values()) {
+        if (other.id !== id && this.sharesRoute(other, tunnel) && other.status !== 'stopped') {
+          other.status = 'stopped'
+          this.emit('update', other)
+        }
+      }
       this.tunnels.set(id, tunnel)
       this.emit('update', tunnel)
       this.persist()
@@ -198,7 +255,20 @@ export class QuickTunnelManager extends EventEmitter {
           service: targetUrl,
           zoneId,
         })
-        tunnel.status = 'running'
+        // The API call only edits config; the hostname serves traffic once a
+        // cloudflared connector is attached, so wait for that before saying running.
+        let connections = 0
+        try {
+          connections = await cloudflare.tunnelConnectionCount(tunnelId)
+        } catch {
+          // Unknown: treat as no connector and keep polling below.
+        }
+        if (connections > 0) {
+          tunnel.status = 'running'
+        } else {
+          tunnel.error = NO_CONNECTOR_WAITING
+          this.watchForConnector(tunnel, cloudflare)
+        }
         this.emit('update', tunnel)
         this.persist()
         return tunnel
@@ -263,8 +333,14 @@ export class QuickTunnelManager extends EventEmitter {
     if (!tunnel) return false
 
     if (tunnel.tunnelType === 'custom_domain' && tunnel.tunnelId && tunnel.hostname) {
+      const routeInUse = [...this.tunnels.values()].some(
+        (t) =>
+          t.id !== id &&
+          (t.status === 'starting' || t.status === 'running') &&
+          this.sharesRoute(t, tunnel),
+      )
       const cloudflare = this.getCloudflare?.()
-      if (cloudflare) {
+      if (cloudflare && !routeInUse) {
         try {
           await cloudflare.unexposeHostname({
             tunnelId: tunnel.tunnelId,
@@ -272,11 +348,17 @@ export class QuickTunnelManager extends EventEmitter {
             zoneId: tunnel.zoneId,
             deleteDns: true,
           })
-        } catch {
-          // best-effort unexpose
+        } catch (err) {
+          tunnel.error = `Teardown failed, hostname may still be configured: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+          this.emit('update', tunnel)
+          this.persist()
+          throw err
         }
       }
       tunnel.status = 'stopped'
+      tunnel.error = undefined
       this.emit('update', tunnel)
       this.persist()
       return true
