@@ -21,4 +21,5 @@ publish:
   provider: github
   owner: tunggyvert
   repo: cloudflare-local
+  releaseType: release
 

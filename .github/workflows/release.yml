@@ -10,7 +10,23 @@ permissions:
   contents: write
 
 jobs:
+  # Create the release once up front. If each matrix job created its own, they
+  # would race and split the assets across two separate releases for one tag.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --target "$GITHUB_SHA"
+
   release:
+    needs: create-release
     strategy:
       matrix:
         os: [windows-latest, macos-latest]
