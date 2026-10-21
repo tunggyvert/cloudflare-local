@@ -34,6 +34,9 @@ test('QuickTunnel: custom domain start and stop lifecycle with unexpose', async 
     async unexposeHostname(params) {
       unexposedParams = params
       return { ok: true, ingressRemoved: true, dnsDeleted: true }
+    },
+    async tunnelConnectionCount() {
+      return 1
     }
   }
 
@@ -76,5 +79,74 @@ test('QuickTunnel: custom domain start and stop lifecycle with unexpose', async 
     deleteDns: true
   })
 
+  cache.close()
+})
+
+function makeCloudflare(connections) {
+  const calls = { unexpose: 0 }
+  return {
+    calls,
+    async exposeHostname(params) {
+      return { ok: true, ingressAdded: true, dnsCreated: true, hostname: params.hostname }
+    },
+    async unexposeHostname() {
+      calls.unexpose++
+      return { ok: true, ingressRemoved: true, dnsDeleted: true }
+    },
+    async tunnelConnectionCount() {
+      return connections
+    }
+  }
+}
+
+const domain = (hostname) => ({
+  mode: 'custom_domain',
+  customDomain: { tunnelId: 't1', hostname }
+})
+
+test('QuickTunnel: custom domain stays starting until a connector attaches', async () => {
+  const cache = new LocalCacheStore(':memory:')
+  const manager = new QuickTunnelManager(new MockSupervisor(), () => makeCloudflare(0), cache)
+
+  const tunnel = await manager.start('3000', domain('dev.tunggyvert.com'))
+  assert.equal(tunnel.status, 'starting')
+  assert.match(tunnel.error, /waiting for a cloudflared connector/)
+
+  await manager.stop(tunnel.id) // also clears the connector poll timer
+  cache.close()
+})
+
+test('QuickTunnel: restarting a hostname supersedes the old row and stop keeps the live route', async () => {
+  const cache = new LocalCacheStore(':memory:')
+  const cloudflare = makeCloudflare(1)
+  const manager = new QuickTunnelManager(new MockSupervisor(), () => cloudflare, cache)
+
+  const first = await manager.start('3000', domain('dev.tunggyvert.com'))
+  const second = await manager.start('3000', domain('dev.tunggyvert.com'))
+  assert.equal(manager.get(first.id)?.status, 'stopped')
+  assert.equal(manager.get(second.id)?.status, 'running')
+
+  // Stopping the superseded row must not tear down the route the live row uses.
+  await manager.stop(first.id)
+  assert.equal(cloudflare.calls.unexpose, 0)
+  assert.equal(manager.get(second.id)?.status, 'running')
+
+  await manager.stop(second.id)
+  assert.equal(cloudflare.calls.unexpose, 1)
+  cache.close()
+})
+
+test('QuickTunnel: failed teardown is reported instead of marking the row stopped', async () => {
+  const cache = new LocalCacheStore(':memory:')
+  const cloudflare = makeCloudflare(1)
+  cloudflare.unexposeHostname = async () => {
+    throw new Error('boom')
+  }
+  const manager = new QuickTunnelManager(new MockSupervisor(), () => cloudflare, cache)
+
+  const tunnel = await manager.start('3000', domain('dev.tunggyvert.com'))
+  await assert.rejects(manager.stop(tunnel.id), /boom/)
+  assert.equal(manager.get(tunnel.id)?.status, 'running')
+  assert.match(manager.get(tunnel.id)?.error, /Teardown failed/)
   cache.close()
 })
